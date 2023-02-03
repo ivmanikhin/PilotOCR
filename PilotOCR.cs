@@ -200,17 +200,12 @@ namespace PilotOCR
         private readonly ObjectLoader _loader;
         private const string RECOGNIZE_ITEM_NAME = "RecognizeItemName";
         private List<Ascon.Pilot.SDK.IDataObject> _dataObjects = new List<Ascon.Pilot.SDK.IDataObject>();
-        private readonly LimitedConcurrencyLevelTaskScheduler lctsNet = new LimitedConcurrencyLevelTaskScheduler(4);
-        private readonly LimitedConcurrencyLevelTaskScheduler lcts = new LimitedConcurrencyLevelTaskScheduler(6);
-        private List<PiPage> recognizedDoc = new List<PiPage>();
+        private readonly LimitedConcurrencyLevelTaskScheduler lctsNet = new LimitedConcurrencyLevelTaskScheduler(3);
+        private readonly LimitedConcurrencyLevelTaskScheduler lcts = new LimitedConcurrencyLevelTaskScheduler(9);
+        private int docsCount = 0; 
         private int pagesCount = 0;
-        private List<Task> taskList = new List<Task>();
-        private bool letterSubjectExists = false;
-        private bool letterDateExists = false;
-        private string letterInboxNum;
-        private object letterSubject;
-        private object letterDate;
-        private string fullFileName;
+
+
         
 
         [ImportingConstructor]
@@ -258,95 +253,111 @@ namespace PilotOCR
         public void OnMenuItemClick(string name, ObjectsViewContext context)
         {
 
-            int docsCount = _dataObjects.Count();
             if (!(name == "RecognizeItemName"))
                 return;
             CancellationTokenSource ctsNet = new CancellationTokenSource();
             this._taskFactory = new TaskFactory(lcts);
             this._taskFactoryNet = new TaskFactory(lctsNet);
             List<Task> netTasks = new List<Task>();
-
-            foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
+            docsCount = _dataObjects.Count;
+            Task.Run(() =>
             {
-                if (dataObject.Attributes.Count > 0)
+
+                foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
-                    Task netTask = _taskFactoryNet.StartNew((Action)(() => 
+                    if (dataObject.Attributes.Count > 0)
                     {
-                        letterInboxNum = dataObject.Attributes.FirstOrDefault().Value.ToString();
-                        letterSubjectExists = dataObject.Attributes.TryGetValue("ECM_letter_subject", out letterSubject);
-                        letterDateExists = dataObject.Attributes.TryGetValue("ECM_inbound_letter_sending_date", out letterDate);
-                        if (letterSubjectExists & letterDateExists)
-                            fullFileName = PATH + letterInboxNum + " - " + letterDate.ToString().Substring(0, 10) + " - " + letterSubject.ToString().Replace('/', '-').Replace('"', ' ').Replace('<', ' ').Replace('>', ' ').Replace(':', ' ') + ".txt";
-                        else if (letterSubjectExists)
-                            fullFileName = PATH + letterInboxNum + " - " + letterSubject.ToString().Replace('/', '-').Replace('"', ' ').Replace('<', ' ').Replace('>', ' ').Replace(':', ' ') + ".txt";
-                        else
-                            fullFileName = PATH + letterInboxNum + ".txt";
-                        if (!File.Exists(fullFileName) && !File.Exists(PATH + letterInboxNum + ".txt"))
+                        bool fileExists = true;
+                        Task netTask = _taskFactoryNet.StartNew(async () => 
                         {
-                            if (dataObject.Type.IsMountable)
+                            List<PiPage> recognizedDoc = new List<PiPage>();
+                            object letterSubject;
+                            object letterDate;
+                            string fullFileName = "";
+                            string letterInboxNum = dataObject.Attributes.FirstOrDefault().Value.ToString();
+                            bool letterSubjectExists = dataObject.Attributes.TryGetValue("ECM_letter_subject", out letterSubject);
+                            bool letterDateExists = dataObject.Attributes.TryGetValue("ECM_inbound_letter_sending_date", out letterDate);
+                            if (letterSubjectExists & letterDateExists)
+                                fullFileName = PATH + letterInboxNum + " - " + letterDate.ToString().Substring(0, 10) + " - " + letterSubject.ToString().Replace('/', '-').Replace('"', ' ').Replace('<', ' ').Replace('>', ' ').Replace(':', ' ') + ".txt";
+                            else if (letterSubjectExists)
+                                fullFileName = PATH + letterInboxNum + " - " + letterSubject.ToString().Replace('/', '-').Replace('"', ' ').Replace('<', ' ').Replace('>', ' ').Replace(':', ' ') + ".txt";
+                            else
+                                fullFileName = PATH + letterInboxNum + ".txt";
+                            if (!File.Exists(fullFileName) && !File.Exists(PATH + letterInboxNum + ".txt"))
                             {
-                                _objectsRepository.Mount(dataObject.Id);
-                                Thread.Sleep(1000);
+                                fileExists = false;
+                                if (dataObject.Type.IsMountable)
+                                {
+                                    _objectsRepository.Mount(dataObject.Id);
+                                    Thread.Sleep(1500);
+                                };
+                                Ascon.Pilot.SDK.IDataObject dataObjectMounted = await _loader.Load(dataObject.Id);
+                                string str = "";
+                                recognizedDoc = RecognizeWholeDoc(dataObjectMounted);
+                                foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObjectMounted.Attributes)
+                                {
+                                    if (attribute.Value != null)
+                                        str = str + attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
+                                };
+                                string contents = str + "\n";
+                                foreach (PiPage piPage in recognizedDoc)
+                                {
+                                    ++pagesCount;
+                                    contents = contents + piPage.fileName + " " + piPage.pageNum.ToString() + ":\n\n" + piPage.text + "\n\n=======================================================================================================================\n\n";
+                                };
+                                try
+                                {
+                                    File.WriteAllText(fullFileName, contents);
+                                }
+                                catch
+                                {
+                                    File.WriteAllText(PATH + letterInboxNum + ".txt", contents);
+                                };
+                                //DoTheJob(dataObject.Id);
                             }
-                            DoTheJob(dataObject.Id);
-                        }
-                        else if (File.Exists(PATH + letterInboxNum + ".txt"))
-                        {
-                            try
+                            else if (File.Exists(PATH + letterInboxNum + ".txt"))
                             {
-                                File.Move(PATH + letterInboxNum + ".txt", fullFileName);
+                                fileExists = true;
+                                try
+                                {
+                                    File.Move(PATH + letterInboxNum + ".txt", fullFileName);
+                                }
+                                catch
+                                {
+                                };
                             }
-                            catch
+                            else
                             {
-                            }
-                        }
-                    }), ctsNet.Token);
-                    netTasks.Add(netTask);
-                }
-            }
-            Task.WaitAll(netTasks.ToArray());
-
-            int num = (int)System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + docsCount.ToString() + " документах");
-            this._dataObjects = (List<Ascon.Pilot.SDK.IDataObject>)null;
-            recognizedDoc = (List<PiPage>)null;
-            GC.Collect();
+                                fileExists = true;
+                            };
+                        }, ctsNet.Token).Unwrap();
+                        netTasks.Add(netTask);
+                        if (!fileExists)
+                            Thread.Sleep(300);
+                        //else
+                        //    Thread.Sleep(10);
+                    };
+                };
+                Task.WaitAll(netTasks.ToArray());
+                int num = (int)System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + docsCount.ToString() + " документах");
+                this._dataObjects = (List<Ascon.Pilot.SDK.IDataObject>)null;
+                ctsNet.Dispose();
+                GC.Collect();
+            });
         }
 
-        public async void DoTheJob(Guid guid)
-        {
-            Ascon.Pilot.SDK.IDataObject dataObject = await _loader.Load(guid);
-            string str = "";
-            recognizedDoc = RecognizeWholeDoc(dataObject);
-            foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObject.Attributes)
-            {
-                if (attribute.Value != null)
-                    str = str + attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
-            }
-            string contents = str + "\n";
-            foreach (PiPage piPage in recognizedDoc)
-            {
-                ++pagesCount;
-                contents = contents + piPage.fileName + " " + piPage.pageNum.ToString() + ":\n\n" + piPage.text + "\n\n=======================================================================================================================\n\n";
-            }
-            try
-            {
-                File.WriteAllText(fullFileName, contents);
-            }
-            catch
-            {
-                File.WriteAllText(PATH + letterInboxNum + ".txt", contents);
-            }
-        }
+        //public async void DoTheJob(Guid guid)
+        //{
+        //}
 
         public List<PiPage> RecognizeWholeDoc(Ascon.Pilot.SDK.IDataObject dataObject)
         {
-            CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+            CancellationTokenSource cts = new CancellationTokenSource();
             List<Task> taskList = new List<Task>();
             List<PiPage> pieceOfDoc = new List<PiPage>();
-            foreach (IFile file1 in dataObject.ActualFileSnapshot.Files)
+            foreach (IFile file in dataObject.ActualFileSnapshot.Files)
             {
-                IFile file = file1;
-                Task task = this._taskFactory.StartNew((Action)(() =>
+                Task task = this._taskFactory.StartNew(() =>
                 {
                     if (this.IsPdfFile(file.Name))
                     {
@@ -357,7 +368,7 @@ namespace PilotOCR
                                 foreach (PiPage page in this.PdfToPages(pdfStream, file.Name))
                                     pieceOfDoc.Add(page);
                                 pdfStream.Close();
-                            }
+                            };
                         }
                         catch (Exception ex)
                         {
@@ -366,30 +377,31 @@ namespace PilotOCR
                                 fileName = file.Name,
                                 text = "FILE IS CORRUPTED " + ex.Message
                             });
-                        }
-                    }
-                    if (!this.IsXpsFile(file.Name))
-                        return;
-                    try
+                        };
+                    };
+                    if (this.IsXpsFile(file.Name))
                     {
-                        using (Stream xpsStream = this._fileProvider.OpenRead(file))
+                        try
                         {
-                            foreach (PiPage page in this.XpsToPages(xpsStream, file.Name))
-                                pieceOfDoc.Add(page);
-                            xpsStream.Close();
+                            using (Stream xpsStream = this._fileProvider.OpenRead(file))
+                            {
+                                foreach (PiPage page in this.XpsToPages(xpsStream, file.Name))
+                                    pieceOfDoc.Add(page);
+                                xpsStream.Close();
+                            };
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        pieceOfDoc.Add(new PiPage()
+                        catch (Exception ex)
                         {
-                            fileName = file.Name,
-                            text = "FILE IS CORRUPTED " + ex.Message
-                        });
-                    }
-                }), cancellationTokenSource.Token);
+                            pieceOfDoc.Add(new PiPage()
+                            {
+                                fileName = file.Name,
+                                text = "FILE IS CORRUPTED " + ex.Message
+                            });
+                        };
+                    };
+                }, cts.Token);
                 taskList.Add(task);
-            }
+            };
             foreach (Guid child in dataObject.Children)
             {
                 Guid fileGuid = child;
@@ -406,7 +418,7 @@ namespace PilotOCR
                                 foreach (PiPage page in this.PdfToPages((Stream)pdfStream, fileName))
                                     pieceOfDoc.Add(page);
                                 pdfStream.Close();
-                            }
+                            };
                         }
                         catch (Exception ex)
                         {
@@ -415,8 +427,8 @@ namespace PilotOCR
                                 fileName = fileName,
                                 text = "FILE IS CORRUPTED " + ex.Message
                             });
-                        }
-                    }
+                        };
+                    };
                     if (this.IsDocFile(storagePath))
                     {
                         string fileName = Path.GetFileName(storagePath);
@@ -429,14 +441,14 @@ namespace PilotOCR
                             {
                                 piPage.text = wordprocessingDocument.MainDocumentPart.Document.Body.InnerText;
                                 pieceOfDoc.Add(piPage);
-                            }
+                            };
                         }
                         catch (Exception ex)
                         {
                             piPage.text = "FILE IS CORRUPTED " + ex.Message;
                             pieceOfDoc.Add(piPage);
-                        }
-                    }
+                        };
+                    };
                     if (this.IsTxtFile(storagePath))
                     {
                         string fileName = Path.GetFileName(storagePath);
@@ -450,71 +462,70 @@ namespace PilotOCR
                         catch (Exception ex)
                         {
                             piPage.text = "FILE IS CORRUPTED " + ex.Message;
-                        }
+                        };
                         pieceOfDoc.Add(piPage);
-                    }
-                    if (!this.IsXlsFile(storagePath))
-                        return;
-                    string fileName1 = Path.GetFileName(storagePath);
-                    PiPage piPage1 = new PiPage();
-                    piPage1.fileName = fileName1;
-                    piPage1.pageNum = 1;
-                    try
+                    };
+                    if (this.IsXlsFile(storagePath))
                     {
-                        using (SpreadsheetDocument spreadsheetDocument = SpreadsheetDocument.Open(storagePath, false))
+                        string fileName = Path.GetFileName(storagePath);
+                        PiPage piPage = new PiPage();
+                        piPage.fileName = fileName;
+                        piPage.pageNum = 1;
+                        try
                         {
-                            SharedStringTable sharedStringTable = spreadsheetDocument.WorkbookPart.SharedStringTablePart.SharedStringTable;
-                            foreach (WorksheetPart worksheetPart in spreadsheetDocument.WorkbookPart.WorksheetParts)
+                            using (SpreadsheetDocument spreadsheetDocument = SpreadsheetDocument.Open(storagePath, false))
                             {
-                                foreach (SheetData element1 in worksheetPart.Worksheet.Elements<SheetData>())
+                                SharedStringTable sharedStringTable = spreadsheetDocument.WorkbookPart.SharedStringTablePart.SharedStringTable;
+                                foreach (WorksheetPart worksheetPart in spreadsheetDocument.WorkbookPart.WorksheetParts)
                                 {
-                                    if (element1.HasChildren)
+                                    foreach (SheetData element1 in worksheetPart.Worksheet.Elements<SheetData>())
                                     {
-                                        foreach (OpenXmlElement element2 in element1.Elements<Row>())
+                                        if (element1.HasChildren)
                                         {
-                                            foreach (Cell element3 in element2.Elements<Cell>())
+                                            foreach (OpenXmlElement element2 in element1.Elements<Row>())
                                             {
-                                                string innerText = element3.InnerText;
-                                                if (element3.DataType != null)
+                                                foreach (Cell element3 in element2.Elements<Cell>())
                                                 {
-                                                    if ((CellValues)element3.DataType == CellValues.SharedString)
+                                                    string innerText = element3.InnerText;
+                                                    if (element3.DataType != null)
                                                     {
-                                                        PiPage piPage2 = piPage1;
-                                                        piPage2.text = piPage2.text + sharedStringTable.ElementAt<OpenXmlElement>(int.Parse(innerText)).InnerText + " ";
-                                                    }
-                                                    else
-                                                    {
-                                                        PiPage piPage3 = piPage1;
-                                                        piPage3.text = piPage3.text + innerText + " ";
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                                                        if ((CellValues)element3.DataType == CellValues.SharedString)
+                                                        {
+                                                            piPage.text = piPage.text + sharedStringTable.ElementAt<OpenXmlElement>(int.Parse(innerText)).InnerText + " ";
+                                                        }
+                                                        else
+                                                        {
+                                                            piPage.text = piPage.text + innerText + " ";
+                                                        };
+                                                    };
+                                                };
+                                            };
+                                        };
+                                    };
+                                };
+                            };
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        piPage1.text = "FILE IS CORRUPTED " + ex.Message;
-                    }
-                    pieceOfDoc.Add(piPage1);
-                }), cancellationTokenSource.Token);
+                        catch (Exception ex)
+                        {
+                            piPage.text = "FILE IS CORRUPTED " + ex.Message;
+                        };
+                        pieceOfDoc.Add(piPage);
+                    };
+                }), cts.Token);
                 taskList.Add(task);
-            }
+            };
             Task.WaitAll(taskList.ToArray());
             foreach (PiPage piPage in pieceOfDoc)
             {
                 piPage.docID = dataObject.Id;
                 piPage.docName = dataObject.Attributes.FirstOrDefault<KeyValuePair<string, object>>().Value.ToString();
-            }
+            };
             return pieceOfDoc;
         }
 
         public List<PiPage> PdfToPages(Stream pdfStream, string fileName)
         {
-            CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+            CancellationTokenSource cts = new CancellationTokenSource();
             List<Task> taskList = new List<Task>();
             List<PiPage> pages = new List<PiPage>();
             using (PdfDocument pdfDocument1 = PdfDocument.Load(pdfStream))
@@ -531,18 +542,18 @@ namespace PilotOCR
                     pageSiz = pdfDocument1.PageSizes[index];
                     int height = pageSiz.ToSize().Height * 2;
                     System.Drawing.Image img = pdfDocument2.Render(page1, width, height, 96f, 96f, false);
-                    Task task = this._taskFactory.StartNew((Action)(() => page.text = this.PageToText(img)), cancellationTokenSource.Token);
+                    Task task = this._taskFactory.StartNew((Action)(() => page.text = this.PageToText(img)), cts.Token);
                     pages.Add(page);
                     taskList.Add(task);
-                }
+                };
                 Task.WaitAll(taskList.ToArray());
                 return pages;
-            }
+            };
         }
 
         public List<PiPage> XpsToPages(Stream xpsStream, string fileName)
         {
-            CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+            CancellationTokenSource cts = new CancellationTokenSource();
             List<Task> taskList = new List<Task>();
             List<PiPage> pages = new List<PiPage>();
             IEnumerable<Stream> bitmap = this._xpsRender.RenderXpsToBitmap(xpsStream, 2.0);
@@ -554,10 +565,10 @@ namespace PilotOCR
                 page.pageNum = num + 1;
                 page.fileName = fileName;
                 pages.Add(page);
-                Task task = this._taskFactory.StartNew((Action)(() => page.text = this.PageToText(image)), cancellationTokenSource.Token);
+                Task task = this._taskFactory.StartNew((Action)(() => page.text = this.PageToText(image)), cts.Token);
                 taskList.Add(task);
                 ++num;
-            }
+            };
             Task.WaitAll(taskList.ToArray());
             return pages;
         }
@@ -583,9 +594,9 @@ namespace PilotOCR
                         image.Save((Stream)memoryStream, ImageFormat.Png);
                         using (TesseractOCR.Page page1 = engine.Process(TesseractOCR.Pix.Image.LoadFromMemory(memoryStream)))
                             text = Regex.Replace(Regex.Replace(page1.Text, " +", " "), "(?<!\\d)-+[ +]?\\n+[ +]?|(?<=[\\d\\wа-яА-я])\\s+(?=\\.)|(?<=\\.)\\s+(?=\\d)", "");
-                    }
-                }
-            }
+                    };
+                };
+            };
             return text;
         }
 
@@ -605,7 +616,7 @@ namespace PilotOCR
                 graphics.RotateTransform(angle);
                 graphics.Clear(System.Drawing.Color.White);
                 graphics.DrawImage((System.Drawing.Image)inputPic, (int)((double)inputPic.Height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)((double)inputPic.Width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
-            }
+            };
             return bitmap2;
         }
 
@@ -625,7 +636,7 @@ namespace PilotOCR
                     graphics.RotateTransform(num1);
                     graphics.Clear(System.Drawing.Color.White);
                     graphics.DrawImage((System.Drawing.Image)inputBmp, (int)((double)height * Math.Sin((double)num1 * 3.1415 / 180.0) * 0.5), -(int)((double)width * Math.Sin((double)num1 * 3.1415 / 180.0) * 0.5));
-                }
+                };
                 using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)bitmap1))
                     graphics.DrawImage((System.Drawing.Image)bitmap2, 0, 0, 1, height);
                 for (int y = 0; y < height; ++y)
@@ -651,7 +662,7 @@ namespace PilotOCR
                     pixel = bitmap1.GetPixel(0, y);
                     int b2 = (int)pixel.B;
                     num2 = num7 + b2;
-                }
+                };
                 System.Array.Sort<int>(numArray1);
                 System.Array.Reverse((System.Array)numArray1);
                 source.Add(num1, ((IEnumerable<int>)numArray1).Take<int>(10).Sum());
