@@ -261,15 +261,16 @@ namespace PilotOCR
             int docsCount = _dataObjects.Count();
             if (!(name == "RecognizeItemName"))
                 return;
-            CancellationTokenSource cts = new CancellationTokenSource();
+            CancellationTokenSource ctsNet = new CancellationTokenSource();
             this._taskFactory = new TaskFactory(lcts);
             this._taskFactoryNet = new TaskFactory(lctsNet);
+            List<Task> netTasks = new List<Task>();
 
-            Task.Run(async () =>
+            foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
             {
-                foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
+                if (dataObject.Attributes.Count > 0)
                 {
-                    if (dataObject.Attributes.Count > 0)
+                    Task netTask = _taskFactoryNet.StartNew((Action)(() => 
                     {
                         letterInboxNum = dataObject.Attributes.FirstOrDefault().Value.ToString();
                         letterSubjectExists = dataObject.Attributes.TryGetValue("ECM_letter_subject", out letterSubject);
@@ -285,30 +286,9 @@ namespace PilotOCR
                             if (dataObject.Type.IsMountable)
                             {
                                 _objectsRepository.Mount(dataObject.Id);
-                                await Task.Delay(500);
+                                Thread.Sleep(1000);
                             }
                             DoTheJob(dataObject.Id);
-                            //string str = "";
-                            //recognizedDoc = RecognizeWholeDoc(dataObject);
-                            //foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObject.Attributes)
-                            //{
-                            //    if (attribute.Value != null)
-                            //        str = str + attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
-                            //}
-                            //string contents = str + "\n";
-                            //foreach (PiPage piPage in recognizedDoc)
-                            //{
-                            //    ++pagesCount;
-                            //    contents = contents + piPage.fileName + " " + piPage.pageNum.ToString() + ":\n\n" + piPage.text + "\n\n=======================================================================================================================\n\n";
-                            //}
-                            //try
-                            //{
-                            //    File.WriteAllText(fullFileName, contents);
-                            //}
-                            //catch
-                            //{
-                            //    File.WriteAllText(PATH + letterInboxNum + ".txt", contents);
-                            //}
                         }
                         else if (File.Exists(PATH + letterInboxNum + ".txt"))
                         {
@@ -320,14 +300,14 @@ namespace PilotOCR
                             {
                             }
                         }
-                    }
+                    }));
                 }
-                cts.Dispose();
-                int num = (int)System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + docsCount.ToString() + " документах");
-                this._dataObjects = (List<Ascon.Pilot.SDK.IDataObject>)null;
-                recognizedDoc = (List<PiPage>)null;
-                GC.Collect();
-            });
+            }
+
+            int num = (int)System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + docsCount.ToString() + " документах");
+            this._dataObjects = (List<Ascon.Pilot.SDK.IDataObject>)null;
+            recognizedDoc = (List<PiPage>)null;
+            GC.Collect();
         }
 
         public async void DoTheJob(Guid guid)
