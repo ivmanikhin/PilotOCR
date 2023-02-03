@@ -300,9 +300,11 @@ namespace PilotOCR
                             {
                             }
                         }
-                    }));
+                    }), ctsNet.Token);
+                    netTasks.Add(netTask);
                 }
             }
+            Task.WaitAll(netTasks.ToArray());
 
             int num = (int)System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + docsCount.ToString() + " документах");
             this._dataObjects = (List<Ascon.Pilot.SDK.IDataObject>)null;
