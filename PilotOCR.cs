@@ -278,7 +278,14 @@ namespace PilotOCR
                             bool letterSubjectExists = dataObject.Attributes.TryGetValue("ECM_letter_subject", out letterSubject);
                             bool letterDateExists = dataObject.Attributes.TryGetValue("ECM_inbound_letter_sending_date", out letterDate);
                             if (letterSubjectExists & letterDateExists)
-                                fullFileName = PATH + letterInboxNum + " - " + letterDate.ToString().Substring(0, 10) + " - " + letterSubject.ToString().Replace('/', '-').Replace('"', ' ').Replace('<', ' ').Replace('>', ' ').Replace(':', ' ') + ".txt";
+                                fullFileName = PATH
+                                             + letterInboxNum
+                                             + " - " + letterDate.ToString().Substring(0, 10)
+                                             + " - " + letterSubject.ToString().Replace('/', '-')
+                                                                               .Replace('"', ' ')
+                                                                               .Replace('<', ' ')
+                                                                               .Replace('>', ' ')
+                                                                               .Replace(':', ' ') + ".txt";
                             else if (letterSubjectExists)
                                 fullFileName = PATH + letterInboxNum + " - " + letterSubject.ToString().Replace('/', '-').Replace('"', ' ').Replace('<', ' ').Replace('>', ' ').Replace(':', ' ') + ".txt";
                             else
@@ -334,8 +341,8 @@ namespace PilotOCR
                         netTasks.Add(netTask);
                         if (!fileExists)
                             Thread.Sleep(300);
-                        //else
-                        //    Thread.Sleep(10);
+                        else
+                            Thread.Sleep(10);
                     };
                 };
                 Task.WaitAll(netTasks.ToArray());
