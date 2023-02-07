@@ -268,60 +268,62 @@ namespace PilotOCR
                     if (dataObject.Attributes.Count > 0)
                     {
                         bool fileExists = true;
-                        Task netTask = _taskFactoryNet.StartNew(async () => 
+                        object letterSubject;
+                        object letterDate;
+                        string fullFileName = "";
+                        string letterInboxNum = dataObject.Attributes.FirstOrDefault().Value.ToString();
+                        bool letterSubjectExists = dataObject.Attributes.TryGetValue("ECM_letter_subject", out letterSubject);
+                        bool letterDateExists = dataObject.Attributes.TryGetValue("ECM_inbound_letter_sending_date", out letterDate);
+                        if (letterSubjectExists & letterDateExists)
+                            fullFileName = PATH
+                                            + letterInboxNum
+                                            + " - " + letterDate.ToString().Substring(0, 10)
+                                            + " - " + letterSubject.ToString().Replace('/', '-')
+                                                                            .Replace('"', ' ')
+                                                                            .Replace('<', ' ')
+                                                                            .Replace('>', ' ')
+                                                                            .Replace(':', ' ') + ".txt";
+                        else if (letterSubjectExists)
+                            fullFileName = PATH + letterInboxNum + " - " + letterSubject.ToString().Replace('/', '-').Replace('"', ' ').Replace('<', ' ').Replace('>', ' ').Replace(':', ' ') + ".txt";
+                        else
+                            fullFileName = PATH + letterInboxNum + ".txt";
+                        if (!File.Exists(fullFileName) && !File.Exists(PATH + letterInboxNum + ".txt"))
                         {
-                            List<PiPage> recognizedDoc = new List<PiPage>();
-                            object letterSubject;
-                            object letterDate;
-                            string fullFileName = "";
-                            string letterInboxNum = dataObject.Attributes.FirstOrDefault().Value.ToString();
-                            bool letterSubjectExists = dataObject.Attributes.TryGetValue("ECM_letter_subject", out letterSubject);
-                            bool letterDateExists = dataObject.Attributes.TryGetValue("ECM_inbound_letter_sending_date", out letterDate);
-                            if (letterSubjectExists & letterDateExists)
-                                fullFileName = PATH
-                                             + letterInboxNum
-                                             + " - " + letterDate.ToString().Substring(0, 10)
-                                             + " - " + letterSubject.ToString().Replace('/', '-')
-                                                                               .Replace('"', ' ')
-                                                                               .Replace('<', ' ')
-                                                                               .Replace('>', ' ')
-                                                                               .Replace(':', ' ') + ".txt";
-                            else if (letterSubjectExists)
-                                fullFileName = PATH + letterInboxNum + " - " + letterSubject.ToString().Replace('/', '-').Replace('"', ' ').Replace('<', ' ').Replace('>', ' ').Replace(':', ' ') + ".txt";
-                            else
-                                fullFileName = PATH + letterInboxNum + ".txt";
-                            if (!File.Exists(fullFileName) && !File.Exists(PATH + letterInboxNum + ".txt"))
+                            Task netTask = _taskFactoryNet.StartNew(async () => 
                             {
-                                fileExists = false;
-                                if (dataObject.Type.IsMountable)
-                                {
-                                    _objectsRepository.Mount(dataObject.Id);
-                                    Thread.Sleep(1500);
-                                };
-                                Ascon.Pilot.SDK.IDataObject dataObjectMounted = await _loader.Load(dataObject.Id);
-                                string str = "";
-                                recognizedDoc = RecognizeWholeDoc(dataObjectMounted);
-                                foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObjectMounted.Attributes)
-                                {
-                                    if (attribute.Value != null)
-                                        str = str + attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
-                                };
-                                string contents = str + "\n";
-                                foreach (PiPage piPage in recognizedDoc)
-                                {
-                                    ++pagesCount;
-                                    contents = contents + piPage.fileName + " " + piPage.pageNum.ToString() + ":\n\n" + piPage.text + "\n\n=======================================================================================================================\n\n";
-                                };
-                                try
-                                {
-                                    File.WriteAllText(fullFileName, contents);
-                                }
-                                catch
-                                {
-                                    File.WriteAllText(PATH + letterInboxNum + ".txt", contents);
-                                };
+                                List<PiPage> recognizedDoc = new List<PiPage>();
+                                    fileExists = false;
+                                    if (dataObject.Type.IsMountable)
+                                    {
+                                        _objectsRepository.Mount(dataObject.Id);
+                                        Thread.Sleep(1500);
+                                    };
+                                    Ascon.Pilot.SDK.IDataObject dataObjectMounted = await _loader.Load(dataObject.Id);
+                                    string str = "";
+                                    recognizedDoc = RecognizeWholeDoc(dataObjectMounted);
+                                    foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObjectMounted.Attributes)
+                                    {
+                                        if (attribute.Value != null)
+                                            str = str + attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
+                                    };
+                                    string contents = str + "\n";
+                                    foreach (PiPage piPage in recognizedDoc)
+                                    {
+                                        ++pagesCount;
+                                        contents = contents + piPage.fileName + " " + piPage.pageNum.ToString() + ":\n\n" + piPage.text + "\n\n=======================================================================================================================\n\n";
+                                    };
+                                    try
+                                    {
+                                        File.WriteAllText(fullFileName, contents);
+                                    }
+                                    catch
+                                    {
+                                        File.WriteAllText(PATH + letterInboxNum + ".txt", contents);
+                                    };
                                 //DoTheJob(dataObject.Id);
-                            }
+                            }, ctsNet.Token).Unwrap();
+                        netTasks.Add(netTask);
+                        }
                             else if (File.Exists(PATH + letterInboxNum + ".txt"))
                             {
                                 fileExists = true;
@@ -337,15 +339,14 @@ namespace PilotOCR
                             {
                                 fileExists = true;
                             };
-                        }, ctsNet.Token).Unwrap();
-                        netTasks.Add(netTask);
                         if (!fileExists)
                             Thread.Sleep(300);
-                        else
-                            Thread.Sleep(10);
+                        //else
+                        //    Thread.Sleep(10);
                     };
                 };
-                Task.WaitAll(netTasks.ToArray());
+                if (netTasks.Count > 0)
+                    Task.WaitAll(netTasks.ToArray());
                 int num = (int)System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + docsCount.ToString() + " документах");
                 this._dataObjects = (List<Ascon.Pilot.SDK.IDataObject>)null;
                 ctsNet.Dispose();
