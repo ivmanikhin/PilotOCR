@@ -94,6 +94,12 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="DataObjectsWrapper.cs" />
+    <Compile Include="ProgressDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="ProgressDialog.Designer.cs">
+      <DependentUpon>ProgressDialog.cs</DependentUpon>
+    </Compile>
     <Compile Include="ObjectLoader.cs" />
     <Compile Include="PilotOCR.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -101,6 +107,9 @@
   <ItemGroup>
     <None Include="app.config" />
     <None Include="packages.config" />
+    <EmbeddedResource Include="ProgressDialog.resx">
+      <DependentUpon>ProgressDialog.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="tessdata\rus%28best%29.traineddata">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </EmbeddedResource>

@@ -21,6 +21,7 @@ using Ascon.Pilot.SDK;
 using Ascon.Pilot.SDK.CreateObjectSample;
 using Ascon.Pilot.SDK.Menu;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.ExtendedProperties;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using PdfiumViewer;
@@ -200,7 +201,6 @@ namespace PilotOCR
         private readonly IObjectModifier _modifier;
         private readonly IObjectsRepository _objectsRepository;
         private readonly ObjectLoader _loader;
-        private const string RECOGNIZE_ITEM_NAME = "RecognizeItemName";
         private List<Ascon.Pilot.SDK.IDataObject> _dataObjects = new List<Ascon.Pilot.SDK.IDataObject>();
         private readonly LimitedConcurrencyLevelTaskScheduler lctsNet = new LimitedConcurrencyLevelTaskScheduler(6);
         private readonly LimitedConcurrencyLevelTaskScheduler lcts = new LimitedConcurrencyLevelTaskScheduler(9);
@@ -258,11 +258,13 @@ namespace PilotOCR
             if (!(name == "RecognizeItemName"))
                 return;
             CancellationTokenSource ctsNet = new CancellationTokenSource();
+            ProgressDialog progressDialog = new ProgressDialog();
             this._taskFactory = new TaskFactory(lcts);
             this._taskFactoryNet = new TaskFactory(lctsNet);
             List<Task> netTasks = new List<Task>();
             docsCount = _dataObjects.Count;
             _dataObjects = MakeRecognitionList(_dataObjects);
+            progressDialog.SetMax(_dataObjects.Count);
             Task.Run(async () =>
             {
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
@@ -291,13 +293,13 @@ namespace PilotOCR
                                 };
 
                                 File.WriteAllText(fullFileName.ToString(), contents);
-
-
+                                progressDialog.RefreshProgress();
                             }, ctsNet.Token)/*.Unwrap()*/;
                     netTasks.Add(netTask);
-                    Thread.Sleep(100);
+                    //Thread.Sleep(100);
 
                 };
+                System.Windows.Forms.Application.Run(progressDialog);
                 //Task.WaitAll(netTasks.ToArray());
                 await Task.WhenAll(netTasks.ToArray());
                 MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + _dataObjects.Count.ToString() + " документах");
@@ -305,7 +307,7 @@ namespace PilotOCR
                 GC.Collect();
 
             });
-            MessageBox.Show("Распознаю " + _dataObjects.Count.ToString() + " из " + docsCount + " документов");
+            //MessageBox.Show("Распознаю " + _dataObjects.Count.ToString() + " из " + docsCount + " документов");
         }
 
         //public async void DoTheJob(Guid guid)
