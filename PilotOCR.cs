@@ -39,6 +39,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Windows.Threading;
 //using System.Windows.Forms;
 using TesseractOCR;
 
@@ -189,7 +190,9 @@ namespace PilotOCR
     }
 
 
-    [Export(typeof(IMenu<ObjectsViewContext>))]
+
+
+        [Export(typeof(IMenu<ObjectsViewContext>))]
 
 
     public class ModifyObjectsPlugin : IMenu<ObjectsViewContext>
@@ -204,11 +207,12 @@ namespace PilotOCR
         private List<Ascon.Pilot.SDK.IDataObject> _dataObjects = new List<Ascon.Pilot.SDK.IDataObject>();
         private readonly LimitedConcurrencyLevelTaskScheduler lctsNet = new LimitedConcurrencyLevelTaskScheduler(6);
         private readonly LimitedConcurrencyLevelTaskScheduler lcts = new LimitedConcurrencyLevelTaskScheduler(9);
+        private CancellationTokenSource ctsNet = new CancellationTokenSource();
+        private CancellationTokenSource cts = new CancellationTokenSource();
         private int docsCount = 0; 
         private int pagesCount = 0;
 
-
-        
+       
 
         [ImportingConstructor]
         public ModifyObjectsPlugin(
@@ -252,19 +256,26 @@ namespace PilotOCR
 
         private bool IsPdfFile(string fileName) => Path.GetExtension(fileName) == ".pdf";
 
+        public void KillThemAll()
+        {
+
+        }
+
         public void OnMenuItemClick(string name, ObjectsViewContext context)
         {
 
             if (!(name == "RecognizeItemName"))
                 return;
-            CancellationTokenSource ctsNet = new CancellationTokenSource();
             ProgressDialog progressDialog = new ProgressDialog();
+
+            
             this._taskFactory = new TaskFactory(lcts);
             this._taskFactoryNet = new TaskFactory(lctsNet);
             List<Task> netTasks = new List<Task>();
             docsCount = _dataObjects.Count;
             _dataObjects = MakeRecognitionList(_dataObjects);
             progressDialog.SetMax(_dataObjects.Count);
+            Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
             Task.Run(async () =>
             {
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
@@ -293,21 +304,20 @@ namespace PilotOCR
                                 };
 
                                 File.WriteAllText(fullFileName.ToString(), contents);
-                                progressDialog.RefreshProgress();
+                                progressDialog.UpdateProgress();
+
                             }, ctsNet.Token)/*.Unwrap()*/;
                     netTasks.Add(netTask);
                     //Thread.Sleep(100);
 
                 };
-                System.Windows.Forms.Application.Run(progressDialog);
-                //Task.WaitAll(netTasks.ToArray());
                 await Task.WhenAll(netTasks.ToArray());
-                MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + _dataObjects.Count.ToString() + " документах");
+                //MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + _dataObjects.Count.ToString() + " документах");
                 ctsNet.Dispose();
                 GC.Collect();
 
             });
-            //MessageBox.Show("Распознаю " + _dataObjects.Count.ToString() + " из " + docsCount + " документов");
+            //Task.Run(() => MessageBox.Show("Распознаю " + _dataObjects.Count.ToString() + " из " + docsCount + " документов"));
         }
 
         //public async void DoTheJob(Guid guid)
@@ -356,7 +366,6 @@ namespace PilotOCR
 
         public List<PiPage> RecognizeWholeDoc(Ascon.Pilot.SDK.IDataObject dataObject)
         {
-            CancellationTokenSource cts = new CancellationTokenSource();
             List<Task> taskList = new List<Task>();
             List<PiPage> pieceOfDoc = new List<PiPage>();
             foreach (IFile file in dataObject.ActualFileSnapshot.Files)
@@ -415,109 +424,35 @@ namespace PilotOCR
                     if (this.IsPdfFile(storagePath))
                     {
                         string fileName = Path.GetFileName(storagePath);
-                        //try
-                        //{
+                        try
+                        {
                             using (FileStream pdfStream = File.OpenRead(storagePath))
                             {
                                 foreach (PiPage page in this.PdfToPages((Stream)pdfStream, fileName))
                                     pieceOfDoc.Add(page);
                                 pdfStream.Close();
                             };
-                        //}
-                        //catch (Exception ex)
-                        //{
-                        //    pieceOfDoc.Add(new PiPage()
-                        //    {
-                        //        fileName = fileName,
-                        //        text = "FILE IS CORRUPTED " + ex.Message
-                        //    });
-                        //};
+                        }
+                        catch (Exception ex)
+                        {
+                            pieceOfDoc.Add(new PiPage()
+                            {
+                                fileName = fileName,
+                                text = "FILE IS CORRUPTED " + ex.Message
+                            });
+                        };
                     };
                     if (this.IsDocFile(storagePath))
                     {
-                        string fileName = Path.GetFileName(storagePath);
-                        PiPage piPage = new PiPage();
-                        piPage.fileName = fileName;
-                        piPage.pageNum = 1;
-                        try
-                        {
-                            using (WordprocessingDocument wordprocessingDocument = WordprocessingDocument.Open(storagePath, false))
-                            {
-                                piPage.text = wordprocessingDocument.MainDocumentPart.Document.Body.InnerText;
-                                pieceOfDoc.Add(piPage);
-                            }
-                        }
-                                catch (Exception ex)
-                            {
-                                piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
-                                pieceOfDoc.Add(piPage);
-                                System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
-                                return;
-                            };
+                        pieceOfDoc.Add(DocToPage(storagePath));
                     };
                     if (this.IsTxtFile(storagePath))
                     {
-                        string fileName = Path.GetFileName(storagePath);
-                        PiPage piPage = new PiPage();
-                        piPage.fileName = fileName;
-                        piPage.pageNum = 1;
-                        try
-                        {
-                            piPage.text = File.ReadAllText(storagePath, Encoding.Default);
-                        }
-                        catch (Exception ex)
-                        {
-                            piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
-                            System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
-                        };
-                        pieceOfDoc.Add(piPage);
+                        pieceOfDoc.Add(TxtToPage(storagePath));
                     };
                     if (this.IsXlsFile(storagePath))
                     {
-                        string fileName = Path.GetFileName(storagePath);
-                        PiPage piPage = new PiPage();
-                        piPage.fileName = fileName;
-                        piPage.pageNum = 1;
-                        try
-                        {
-                            using (SpreadsheetDocument spreadsheetDocument = SpreadsheetDocument.Open(storagePath, false))
-                            {
-                                SharedStringTable sharedStringTable = spreadsheetDocument.WorkbookPart.SharedStringTablePart.SharedStringTable;
-                                foreach (WorksheetPart worksheetPart in spreadsheetDocument.WorkbookPart.WorksheetParts)
-                                {
-                                    foreach (SheetData element1 in worksheetPart.Worksheet.Elements<SheetData>())
-                                    {
-                                        if (element1.HasChildren)
-                                        {
-                                            foreach (OpenXmlElement element2 in element1.Elements<Row>())
-                                            {
-                                                foreach (Cell element3 in element2.Elements<Cell>())
-                                                {
-                                                    string innerText = element3.InnerText;
-                                                    if (element3.DataType != null)
-                                                    {
-                                                        if ((CellValues)element3.DataType == CellValues.SharedString)
-                                                        {
-                                                            piPage.text = piPage.text + sharedStringTable.ElementAt<OpenXmlElement>(int.Parse(innerText)).InnerText + " ";
-                                                        }
-                                                        else
-                                                        {
-                                                            piPage.text = piPage.text + innerText + " ";
-                                                        };
-                                                    };
-                                                };
-                                            };
-                                        };
-                                    };
-                                };
-                            };
-                        }
-                        catch (Exception ex)
-                        {
-                            piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
-                            System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
-                        };
-                        pieceOfDoc.Add(piPage);
+                        pieceOfDoc.Add(XlsToPage(storagePath));
                     };
                 }), cts.Token);
                 taskList.Add(task);
@@ -531,9 +466,99 @@ namespace PilotOCR
             return pieceOfDoc;
         }
 
-        public List<PiPage> PdfToPages(Stream pdfStream, string fileName)
+
+        private PiPage XlsToPage(string storagePath)
         {
-            CancellationTokenSource cts = new CancellationTokenSource();
+            string fileName = Path.GetFileName(storagePath);
+            PiPage piPage = new PiPage();
+            piPage.fileName = fileName;
+            piPage.pageNum = 1;
+            try
+            {
+                using (SpreadsheetDocument spreadsheetDocument = SpreadsheetDocument.Open(storagePath, false))
+                {
+                    SharedStringTable sharedStringTable = spreadsheetDocument.WorkbookPart.SharedStringTablePart.SharedStringTable;
+                    foreach (WorksheetPart worksheetPart in spreadsheetDocument.WorkbookPart.WorksheetParts)
+                    {
+                        foreach (SheetData element1 in worksheetPart.Worksheet.Elements<SheetData>())
+                        {
+                            if (element1.HasChildren)
+                            {
+                                foreach (OpenXmlElement element2 in element1.Elements<Row>())
+                                {
+                                    foreach (Cell element3 in element2.Elements<Cell>())
+                                    {
+                                        string innerText = element3.InnerText;
+                                        if (element3.DataType != null)
+                                        {
+                                            if ((CellValues)element3.DataType == CellValues.SharedString)
+                                            {
+                                                piPage.text = piPage.text + sharedStringTable.ElementAt<OpenXmlElement>(int.Parse(innerText)).InnerText + " ";
+                                            }
+                                            else
+                                            {
+                                                piPage.text = piPage.text + innerText + " ";
+                                            };
+                                        };
+                                    };
+                                };
+                            };
+                        };
+                    };
+                };
+            }
+            catch (Exception ex)
+            {
+                piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
+                //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
+            };
+            return piPage;
+        }
+
+
+        private PiPage DocToPage(string storagePath)
+        {
+            string fileName = Path.GetFileName(storagePath);
+            PiPage piPage = new PiPage();
+            piPage.fileName = fileName;
+            piPage.pageNum = 1;
+            try
+            {
+                using (WordprocessingDocument wordprocessingDocument = WordprocessingDocument.Open(storagePath, false))
+                {
+                    piPage.text = wordprocessingDocument.MainDocumentPart.Document.Body.InnerText;
+                }
+            }
+            catch (Exception ex)
+            {
+                piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
+                //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
+            };
+            return piPage;
+        }
+
+
+        private PiPage TxtToPage(string storagePath)
+        {
+            string fileName = Path.GetFileName(storagePath);
+            PiPage piPage = new PiPage();
+            piPage.fileName = fileName;
+            piPage.pageNum = 1;
+            try
+            {
+                piPage.text = File.ReadAllText(storagePath, Encoding.Default);
+            }
+            catch (Exception ex)
+            {
+                piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
+                //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
+            };
+            return piPage;
+        }
+
+
+        private List<PiPage> PdfToPages(Stream pdfStream, string fileName)
+        {
             List<Task> taskList = new List<Task>();
             List<PiPage> pages = new List<PiPage>();
             using (PdfDocument pdfDocument1 = PdfDocument.Load(pdfStream))
@@ -561,7 +586,6 @@ namespace PilotOCR
 
         public List<PiPage> XpsToPages(Stream xpsStream, string fileName)
         {
-            CancellationTokenSource cts = new CancellationTokenSource();
             List<Task> taskList = new List<Task>();
             List<PiPage> pages = new List<PiPage>();
             IEnumerable<Stream> bitmap = this._xpsRender.RenderXpsToBitmap(xpsStream, 2.0);

@@ -45,7 +45,7 @@
             // 
             this.Comment.AutoSize = true;
             this.Comment.ImageAlign = System.Drawing.ContentAlignment.TopCenter;
-            this.Comment.Location = new System.Drawing.Point(287, 9);
+            this.Comment.Location = new System.Drawing.Point(12, 9);
             this.Comment.Margin = new System.Windows.Forms.Padding(3, 0, 3, 1);
             this.Comment.Name = "Comment";
             this.Comment.Size = new System.Drawing.Size(68, 13);
