@@ -211,7 +211,6 @@ namespace PilotOCR
         private CancellationTokenSource cts = new CancellationTokenSource();
         private int docsCount = 0; 
         private int pagesCount = 0;
-
        
 
         [ImportingConstructor]
@@ -256,9 +255,10 @@ namespace PilotOCR
 
         private bool IsPdfFile(string fileName) => Path.GetExtension(fileName) == ".pdf";
 
-        public void KillThemAll()
+        public void KillThemAll(ProgressDialog progressDialog)
         {
-
+            cts.Cancel();
+            ctsNet.Cancel();
         }
 
         public void OnMenuItemClick(string name, ObjectsViewContext context)
@@ -266,9 +266,8 @@ namespace PilotOCR
 
             if (!(name == "RecognizeItemName"))
                 return;
-            ProgressDialog progressDialog = new ProgressDialog();
-
-            
+            ProgressDialog progressDialog = new ProgressDialog(this);
+        
             this._taskFactory = new TaskFactory(lcts);
             this._taskFactoryNet = new TaskFactory(lctsNet);
             List<Task> netTasks = new List<Task>();
@@ -312,7 +311,8 @@ namespace PilotOCR
 
                 };
                 await Task.WhenAll(netTasks.ToArray());
-                //MessageBox.Show(pagesCount.ToString() + " страниц найдено.\n в " + _dataObjects.Count.ToString() + " документах");
+                MessageBox.Show(pagesCount.ToString() + " страниц распознано\n в " + _dataObjects.Count.ToString() + " документах");
+                progressDialog.Close();
                 ctsNet.Dispose();
                 GC.Collect();
 
@@ -374,43 +374,43 @@ namespace PilotOCR
                 {
                     if (this.IsPdfFile(file.Name))
                     {
-                        //try
-                        //{
+                        try
+                        {
                             using (Stream pdfStream = this._fileProvider.OpenRead(file))
                             {
                                 foreach (PiPage page in this.PdfToPages(pdfStream, file.Name))
                                     pieceOfDoc.Add(page);
                                 pdfStream.Close();
                             };
-                        //}
-                        //catch (Exception ex)
-                        //{
-                        //    pieceOfDoc.Add(new PiPage()
-                        //    {
-                        //        fileName = file.Name,
-                        //        text = "FILE IS CORRUPTED " + ex.Message
-                        //    });
-                        //};
+                        }
+                        catch (Exception ex)
+                        {
+                            pieceOfDoc.Add(new PiPage()
+                            {
+                                fileName = file.Name,
+                                text = "FILE IS CORRUPTED " + ex.Message
+                            });
+                        };
                     };
                     if (this.IsXpsFile(file.Name))
                     {
-                        //try
-                        //{
+                        try
+                        {
                             using (Stream xpsStream = this._fileProvider.OpenRead(file))
                             {
                                 foreach (PiPage page in this.XpsToPages(xpsStream, file.Name))
                                     pieceOfDoc.Add(page);
                                 xpsStream.Close();
                             };
-                        //}
-                        //catch (Exception ex)
-                        //{
-                        //    pieceOfDoc.Add(new PiPage()
-                        //    {
-                        //        fileName = file.Name,
-                        //        text = "FILE IS CORRUPTED " + ex.Message
-                        //    });
-                        //};
+                        }
+                        catch (Exception ex)
+                        {
+                            pieceOfDoc.Add(new PiPage()
+                            {
+                                fileName = file.Name,
+                                text = "FILE IS CORRUPTED " + ex.Message
+                            });
+                        };
                     };
                 }, cts.Token);
                 taskList.Add(task);

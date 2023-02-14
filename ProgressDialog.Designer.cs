@@ -30,6 +30,7 @@
         {
             this.progressBar1 = new System.Windows.Forms.ProgressBar();
             this.Comment = new System.Windows.Forms.Label();
+            this.cancelBtn = new System.Windows.Forms.Button();
             this.SuspendLayout();
             // 
             // progressBar1
@@ -53,11 +54,22 @@
             this.Comment.Text = "Распознано";
             this.Comment.TextAlign = System.Drawing.ContentAlignment.TopCenter;
             // 
+            // cancelBtn
+            // 
+            this.cancelBtn.Location = new System.Drawing.Point(524, 4);
+            this.cancelBtn.Name = "cancelBtn";
+            this.cancelBtn.Size = new System.Drawing.Size(75, 23);
+            this.cancelBtn.TabIndex = 2;
+            this.cancelBtn.Text = "Cancel";
+            this.cancelBtn.UseVisualStyleBackColor = true;
+            this.cancelBtn.Click += new System.EventHandler(this.cancelBtn_Click);
+            // 
             // ProgressDialog
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(624, 68);
+            this.Controls.Add(this.cancelBtn);
             this.Controls.Add(this.Comment);
             this.Controls.Add(this.progressBar1);
             this.Name = "ProgressDialog";
@@ -71,5 +83,6 @@
 
         private System.Windows.Forms.ProgressBar progressBar1;
         private System.Windows.Forms.Label Comment;
+        private System.Windows.Forms.Button cancelBtn;
     }
 }
