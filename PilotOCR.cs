@@ -40,9 +40,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Windows.Threading;
+using MySql.Data.MySqlClient;
+using System.Diagnostics;
 //using System.Windows.Forms;
 using TesseractOCR;
-
+using Org.BouncyCastle.Asn1.Cms;
+using System.Runtime.CompilerServices;
 
 namespace PilotOCR
 {
@@ -69,6 +72,30 @@ namespace PilotOCR
             this.image = image;
         }
     }
+
+    //public class PiDoc
+    //{
+    //    public Guid docID { get; set; }
+    //    public string docName { get; set; }
+    //    public string fileName { get; set; }
+    //    public int pageNum { get; set; }
+    //    public string text { get; set; }
+    //    public Image image { get; set; }
+
+    //    public PiDoc()
+    //    {
+
+    //    }
+    //    public PiDoc(Guid docID, string docName, string fileName, int pageNum, string text, Image image)
+    //    {
+    //        this.docID = docID;
+    //        this.docName = docName;
+    //        this.fileName = fileName;
+    //        this.pageNum = pageNum;
+    //        this.text = text;
+    //        this.image = image;
+    //    }
+    //}
 
     public class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
     {
@@ -192,21 +219,22 @@ namespace PilotOCR
 
 
 
-        [Export(typeof(IMenu<ObjectsViewContext>))]
+    [Export(typeof(IMenu<ObjectsViewContext>))]
 
 
     public class ModifyObjectsPlugin : IMenu<ObjectsViewContext>
     {
         private const string PATH = "D:\\TEMP\\Recognized\\";
-        private TaskFactory _taskFactory, _taskFactoryNet;
+        private TaskFactory _taskFactory, _taskFactoryNet, _taskFactoryGraphics;
         private readonly IXpsRender _xpsRender;
         private readonly IFileProvider _fileProvider;
         private readonly IObjectModifier _modifier;
         private readonly IObjectsRepository _objectsRepository;
         private readonly ObjectLoader _loader;
         private List<Ascon.Pilot.SDK.IDataObject> _dataObjects = new List<Ascon.Pilot.SDK.IDataObject>();
-        private readonly LimitedConcurrencyLevelTaskScheduler lctsNet = new LimitedConcurrencyLevelTaskScheduler(6);
+        private readonly LimitedConcurrencyLevelTaskScheduler lctsNet = new LimitedConcurrencyLevelTaskScheduler(4);
         private readonly LimitedConcurrencyLevelTaskScheduler lcts = new LimitedConcurrencyLevelTaskScheduler(9);
+        private readonly LimitedConcurrencyLevelTaskScheduler lctsGraphics = new LimitedConcurrencyLevelTaskScheduler(1);
         private CancellationTokenSource ctsNet = new CancellationTokenSource();
         private CancellationTokenSource cts = new CancellationTokenSource();
         private int docsCount = 0; 
@@ -270,31 +298,64 @@ namespace PilotOCR
         
             this._taskFactory = new TaskFactory(lcts);
             this._taskFactoryNet = new TaskFactory(lctsNet);
-            List<Task> netTasks = new List<Task>();
+            _taskFactoryGraphics = new TaskFactory(lctsGraphics);
+            List <Task> netTasks = new List<Task>();
             docsCount = _dataObjects.Count;
             _dataObjects = MakeRecognitionList(_dataObjects);
             progressDialog.SetMax(_dataObjects.Count);
             Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
             Task.Run(async () =>
             {
+                string CONNECTION_PARAMETERS = "datasource=localhost;port=3306;username=root;password=C@L0P$Ck;charset=utf8";
+                MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
+                connection.Open();
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
                     object fullFileName;
                     dataObject.Attributes.TryGetValue("fullFileName", out fullFileName);
                     Task netTask = await _taskFactoryNet.StartNew(async () =>
                             {
+                                string inputNo = "";
+                                string outNo = "";
+                                string docId = dataObject.Id.ToString();
+                                string docDate = "";
+                                string docSubject = "";
+                                string docCorrespondent = "";
+                                string str = "";
                                 List<PiPage> recognizedDoc = new List<PiPage>();
                                 Ascon.Pilot.SDK.IDataObject dataObjectMounted;
                                 _objectsRepository.Mount(dataObject.Id);
                                 Thread.Sleep(3000);
                                 dataObjectMounted = await _loader.Load(dataObject.Id);
-                                string str = "";
-                                recognizedDoc = RecognizeWholeDoc(dataObjectMounted);
                                 foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObjectMounted.Attributes)
                                 {
                                     if (attribute.Value != null)
+                                    {
                                         str = str + attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
+                                        switch (attribute.Key.ToString())
+                                        {
+                                            case "ECM_inbound_letter_counter":
+                                                inputNo = attribute.Value.ToString();
+                                                break;
+                                            case "ECM_inbound_letter_ref_number_1":
+                                                outNo = attribute.Value.ToString();
+                                                break;
+                                            case "ECM_inbound_letter_ref_date_1":
+                                                docDate = attribute.Value.ToString();
+                                                break;
+                                            case "ECM_letter_subject":
+                                                docSubject = attribute.Value.ToString();
+                                                break;
+                                            case "ECM_letter_correspondent":
+                                                docCorrespondent = attribute.Value.ToString();
+                                                break;
+                                            default:
+                                                break;
+                                        }
+                                    }
                                 };
+                                Debug.WriteLine("Beginning letter " + inputNo + " recognition");
+                                recognizedDoc = RecognizeWholeDoc(dataObjectMounted);
                                 string contents = str + "\n";
                                 foreach (PiPage piPage in recognizedDoc)
                                 {
@@ -302,15 +363,20 @@ namespace PilotOCR
                                     contents = contents + piPage.fileName + " " + piPage.pageNum.ToString() + ":\n\n" + piPage.text + "\n\n=======================================================================================================================\n\n";
                                 };
 
-                                File.WriteAllText(fullFileName.ToString(), contents);
+
+                                //File.WriteAllText(fullFileName.ToString(), contents);
+                                Debug.WriteLine("Doc recognition " + inputNo + " complete");
+                                DocToDB(connection, inputNo, outNo, docId, docDate, docSubject, docCorrespondent, contents);
+                                Debug.WriteLine("Doc " + inputNo + " written to DB");
                                 progressDialog.UpdateProgress();
 
                             }, ctsNet.Token)/*.Unwrap()*/;
                     netTasks.Add(netTask);
-                    //Thread.Sleep(100);
+                    Thread.Sleep(100);
 
                 };
                 await Task.WhenAll(netTasks.ToArray());
+                connection.Close();
                 MessageBox.Show(pagesCount.ToString() + " страниц распознано\n в " + _dataObjects.Count.ToString() + " документах");
                 progressDialog.Close();
                 ctsNet.Dispose();
@@ -632,6 +698,35 @@ namespace PilotOCR
             return text;
         }
 
+        private void DocToDB(MySqlConnection connection, string inputNo, string outNo, string docId, string docDate, string docSubject, string docCorrespondent, string docText)
+        {
+            int inputNoInt = 128;
+            Int32.TryParse(inputNo, out inputNoInt);
+            docText = MySqlHelper.EscapeString(docText);
+            outNo = MySqlHelper.EscapeString(outNo);
+            docId = MySqlHelper.EscapeString(docId);
+            docDate = MySqlHelper.EscapeString(docDate);
+            docSubject = MySqlHelper.EscapeString(docSubject);
+            docCorrespondent = MySqlHelper.EscapeString(docCorrespondent);
+            //docSubject = docSubject.Replace("'", " ").Replace("\"", " ");
+            string commandText = "INSERT INTO pilotsql.inbox(input_no, out_no, doc_id, date, subject, correspondent, text) VALUES (@inputNo, @outNo, @docId, @docDate, @docSubject, @docCorrespondent, @docText)";
+
+            MySqlCommand command = new MySqlCommand(commandText, connection);
+            command.Parameters.AddWithValue("@inputNo", inputNoInt);
+            command.Parameters.AddWithValue("@outNo", outNo);
+            command.Parameters.AddWithValue("@docId", docId);
+            command.Parameters.AddWithValue("@docDate", docDate);
+            command.Parameters.AddWithValue("@docSubject", docSubject);
+            command.Parameters.AddWithValue("@docCorrespondent", docCorrespondent);
+            command.Parameters.AddWithValue("@docText", docText);
+            //MessageBox.Show(commandText);
+            command.ExecuteNonQuery();
+            //    MessageBox.Show("Data Inserted");
+            //else
+            //    MessageBox.Show("Failed");
+            
+        }
+
         private Bitmap TiltDocument(Bitmap inputPic)
         {
             Bitmap bitmap1 = new Bitmap(inputPic.Width * 2 / 3, inputPic.Height / 2);
@@ -640,15 +735,19 @@ namespace PilotOCR
             Bitmap inputBmp = new Bitmap(height * 2 / 3, height);
             Rectangle rect = new Rectangle((inputPic.Width - bitmap1.Width) / 2, (inputPic.Height - bitmap1.Height) / 2, (inputPic.Width + bitmap1.Width) / 2, (inputPic.Height + bitmap1.Height) / 2);
             Bitmap bitmap3 = inputPic.Clone(rect, inputPic.PixelFormat);
-            using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)inputBmp))
-                graphics.DrawImage((System.Drawing.Image)bitmap3, 0, 0, inputBmp.Width, inputBmp.Height);
-            float angle = this.GetOptimumAngle(inputBmp, 10f, 1f) + this.GetOptimumAngle(inputBmp, 1.25f, 0.25f);
-            using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)bitmap2))
+            Task graphicsTask = _taskFactory.StartNew(() =>
             {
-                graphics.RotateTransform(angle);
-                graphics.Clear(System.Drawing.Color.White);
-                graphics.DrawImage((System.Drawing.Image)inputPic, (int)((double)inputPic.Height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)((double)inputPic.Width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
-            };
+                using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)inputBmp))
+                    graphics.DrawImage((System.Drawing.Image)bitmap3, 0, 0, inputBmp.Width, inputBmp.Height);
+                float angle = this.GetOptimumAngle(inputBmp, 10f, 1f) + this.GetOptimumAngle(inputBmp, 1.25f, 0.25f);
+                using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)bitmap2))
+                {
+                    graphics.RotateTransform(angle);
+                    graphics.Clear(System.Drawing.Color.White);
+                    graphics.DrawImage((System.Drawing.Image)inputPic, (int)((double)inputPic.Height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)((double)inputPic.Width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
+                };
+            });
+            Task.WaitAll(graphicsTask);
             return bitmap2;
         }
 
