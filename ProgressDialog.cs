@@ -1,11 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -43,7 +36,16 @@ namespace PilotOCR
 
         private void cancelBtn_Click(object sender, EventArgs e)
         {
-            _mainClass.KillThemAll(this);
+            _mainClass.KillThemAll();
+            this.Close();
+        }
+
+        public void CloseRemotely()
+        {
+            new Thread(() =>
+            {
+                Invoke((Action)(() => Close()));
+            }).Start();
         }
     }
 }
