@@ -26,6 +26,17 @@ namespace PilotOCR
             }).Start();
         }
 
+        public void SetCurrentDocName(string currentDocName)
+        {
+            new Thread(() =>
+            {
+                Invoke((Action)(() =>
+                {
+                    Comment2.Text = currentDocName;
+                }));
+            }).Start();
+        }
+
 
 
         public void SetMax(int maxValue)
@@ -46,6 +57,11 @@ namespace PilotOCR
             {
                 Invoke((Action)(() => Close()));
             }).Start();
+        }
+
+        private void ProgressDialog_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            _mainClass.KillThemAll();
         }
     }
 }

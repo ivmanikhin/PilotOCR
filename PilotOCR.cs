@@ -2,6 +2,7 @@
 using Ascon.Pilot.SDK.CreateObjectSample;
 using Ascon.Pilot.SDK.Menu;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Office2019.Excel.RichData2;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using MySql.Data.MySqlClient;
@@ -49,124 +50,7 @@ namespace PilotOCR
     }
 
 
-    public class LimitedConcurrencyLevelTaskScheduler : TaskScheduler
-    {
-        // Indicates whether the current thread is processing work items.
-        [ThreadStatic]
-        private static bool _currentThreadIsProcessingItems;
 
-        // The list of tasks to be executed
-        private readonly LinkedList<Task> _tasks = new LinkedList<Task>(); // protected by lock(_tasks)
-
-        // The maximum concurrency level allowed by this scheduler.
-        private readonly int _maxDegreeOfParallelism;
-
-        // Indicates whether the scheduler is currently processing work items.
-        private int _delegatesQueuedOrRunning = 0;
-
-        // Creates a new instance with the specified degree of parallelism.
-        public LimitedConcurrencyLevelTaskScheduler(int maxDegreeOfParallelism)
-        {
-            if (maxDegreeOfParallelism < 1) throw new ArgumentOutOfRangeException("maxDegreeOfParallelism");
-            _maxDegreeOfParallelism = maxDegreeOfParallelism;
-        }
-
-        // Queues a task to the scheduler.
-        protected sealed override void QueueTask(Task task)
-        {
-            // Add the task to the list of tasks to be processed.  If there aren't enough
-            // delegates currently queued or running to process tasks, schedule another.
-            lock (_tasks)
-            {
-                _tasks.AddLast(task);
-                if (_delegatesQueuedOrRunning < _maxDegreeOfParallelism)
-                {
-                    ++_delegatesQueuedOrRunning;
-                    NotifyThreadPoolOfPendingWork();
-                }
-            }
-        }
-
-        // Inform the ThreadPool that there's work to be executed for this scheduler.
-        private void NotifyThreadPoolOfPendingWork()
-        {
-            ThreadPool.UnsafeQueueUserWorkItem(_ =>
-            {
-                // Note that the current thread is now processing work items.
-                // This is necessary to enable inlining of tasks into this thread.
-                _currentThreadIsProcessingItems = true;
-                try
-                {
-                    // Process all available items in the queue.
-                    while (true)
-                    {
-                        Task item;
-                        lock (_tasks)
-                        {
-                            // When there are no more items to be processed,
-                            // note that we're done processing, and get out.
-                            if (_tasks.Count == 0)
-                            {
-                                --_delegatesQueuedOrRunning;
-                                break;
-                            }
-
-                            // Get the next item from the queue
-                            item = _tasks.First.Value;
-                            _tasks.RemoveFirst();
-                        }
-
-                        // Execute the task we pulled out of the queue
-                        base.TryExecuteTask(item);
-                    }
-                }
-                // We're done processing items on the current thread
-                finally { _currentThreadIsProcessingItems = false; }
-            }, null);
-        }
-
-        // Attempts to execute the specified task on the current thread.
-        protected sealed override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
-        {
-            // If this thread isn't already processing a task, we don't support inlining
-            if (!_currentThreadIsProcessingItems) return false;
-
-            // If the task was previously queued, remove it from the queue
-            if (taskWasPreviouslyQueued)
-                // Try to run the task.
-                if (TryDequeue(task))
-                    return base.TryExecuteTask(task);
-                else
-                    return false;
-            else
-                return base.TryExecuteTask(task);
-        }
-
-        // Attempt to remove a previously scheduled task from the scheduler.
-        protected sealed override bool TryDequeue(Task task)
-        {
-            lock (_tasks) return _tasks.Remove(task);
-        }
-
-        // Gets the maximum concurrency level supported by this scheduler.
-        public sealed override int MaximumConcurrencyLevel { get { return _maxDegreeOfParallelism; } }
-
-        // Gets an enumerable of the tasks currently scheduled on this scheduler.
-        protected sealed override IEnumerable<Task> GetScheduledTasks()
-        {
-            bool lockTaken = false;
-            try
-            {
-                Monitor.TryEnter(_tasks, ref lockTaken);
-                if (lockTaken) return _tasks;
-                else throw new NotSupportedException();
-            }
-            finally
-            {
-                if (lockTaken) Monitor.Exit(_tasks);
-            }
-        }
-    }
 
 
 
@@ -177,30 +61,22 @@ namespace PilotOCR
     public class ModifyObjectsPlugin : IMenu<ObjectsViewContext>
     {
         private const string CONNECTION_PARAMETERS = "datasource=localhost;port=3306;username=root;password=C@L0P$Ck;charset=utf8";
-        private const string PATH = "D:\\TEMP\\Recognized\\";
-        private TaskFactory _taskFactoryNet, _taskFactoryRecognition/*, _taskFactoryGrapgic*/;
+//        private const string PATH = "D:\\TEMP\\Recognized\\";
+        private TaskFactory _taskFactoryRecognition;
         private readonly IXpsRender _xpsRender;
         private readonly IFileProvider _fileProvider;
         private readonly IObjectModifier _modifier;
         private readonly IObjectsRepository _objectsRepository;
         private readonly ObjectLoader _loader;
         private List<Ascon.Pilot.SDK.IDataObject> _dataObjects = new List<Ascon.Pilot.SDK.IDataObject>();
-        private readonly LimitedConcurrencyLevelTaskScheduler lctsNet = new LimitedConcurrencyLevelTaskScheduler(4);
         private readonly LimitedConcurrencyLevelTaskScheduler lctsRecognition = new LimitedConcurrencyLevelTaskScheduler(8);
-        //private readonly LimitedConcurrencyLevelTaskScheduler lctsGraphic = new LimitedConcurrencyLevelTaskScheduler(1);
-        private CancellationTokenSource ctsNet = new CancellationTokenSource();
-        private CancellationTokenSource ctsRecognition = new CancellationTokenSource();
-        //private CancellationTokenSource ctsGrapgic = new CancellationTokenSource();
         private int docsCount = 0; 
         private int pagesCount = 0;
-       
+        private bool cancelled = false;
+
 
         [ImportingConstructor]
-        public ModifyObjectsPlugin(
-          IObjectModifier modifier,
-          IXpsRender xpsRender,
-          IFileProvider fileProvider,
-          IObjectsRepository objectsRepository)
+        public ModifyObjectsPlugin(IObjectModifier modifier, IXpsRender xpsRender, IFileProvider fileProvider, IObjectsRepository objectsRepository)
         {
             this._modifier = modifier;
             this._xpsRender = xpsRender;
@@ -239,9 +115,7 @@ namespace PilotOCR
 
         public void KillThemAll()
         {
-            //ctsRecognition.Cancel();
-            //ctsNet.Cancel();
-            pagesCount = 0;
+            cancelled = true;
         }
 
         public void OnMenuItemClick(string name, ObjectsViewContext context)
@@ -250,24 +124,21 @@ namespace PilotOCR
             if (!(name == "RecognizeItemName"))
                 return;
             ProgressDialog progressDialog = new ProgressDialog(this);
-            this._taskFactoryNet = new TaskFactory(lctsNet);
+            cancelled = false;
             _taskFactoryRecognition = new TaskFactory(lctsRecognition);
-            //_taskFactoryGrapgic = new TaskFactory(lctsGraphic);
             var netTasks = new ConcurrentBag<Task>();
             docsCount = _dataObjects.Count;
+            pagesCount = 0;
             _dataObjects = MakeRecognitionList(_dataObjects);
             progressDialog.SetMax(_dataObjects.Count);
-            Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
+            Task progressDialogTask = Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
             Task.Run(async () =>
             {
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
-                    //Task netTask = await _taskFactoryNet.StartNew(async () =>
-                    //        {
-                                _objectsRepository.Mount(dataObject.Id);
-                    //        }, ctsNet.Token);
-                    //netTasks.Add(netTask);
-                    await Task.Delay(100);
+                    if (cancelled) break;
+                    _objectsRepository.Mount(dataObject.Id);
+                    await Task.Delay(50);
                 };
                 Task.WaitAll(netTasks.ToArray());
                 await Task.Delay(3000);
@@ -275,6 +146,7 @@ namespace PilotOCR
                 connection.Open();
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
+                    if (cancelled) break;
                     string inputNo = "";
                     string outNo = "";
                     string docId = dataObject.Id.ToString();
@@ -295,10 +167,10 @@ namespace PilotOCR
                                 case "ECM_inbound_letter_counter":
                                     inputNo = attribute.Value.ToString();
                                     break;
-                                case "ECM_inbound_letter_ref_number_1":
+                                case "ECM_inbound_letter_number":
                                     outNo = attribute.Value.ToString();
                                     break;
-                                case "ECM_inbound_letter_ref_date_1":
+                                case "ECM_inbound_letter_sending_date":
                                     docDate = attribute.Value.ToString();
                                     break;
                                 case "ECM_letter_subject":
@@ -312,7 +184,9 @@ namespace PilotOCR
                             }
                         }
                     };
+                    progressDialog.SetCurrentDocName(inputNo + " - " + outNo + " - " + docDate + " - " + docSubject);
                     recognizedDoc = RecognizeWholeDoc(dataObjectMounted);
+                    if (cancelled) break;
                     string contents = str + "\n";
                     foreach (PiPage piPage in recognizedDoc)
                     {
@@ -326,8 +200,7 @@ namespace PilotOCR
                 connection.Close();
                 System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц распознано\n в " + _dataObjects.Count.ToString() + " документах");
                 pagesCount = 0;
-                progressDialog.CloseRemotely();
-
+                if (!cancelled) progressDialog.CloseRemotely();
             });
         }
 
@@ -376,10 +249,13 @@ namespace PilotOCR
 
         public List<PiPage> RecognizeWholeDoc(Ascon.Pilot.SDK.IDataObject dataObject)
         {
+            var ctsRecognition = new CancellationTokenSource();
+            var token = ctsRecognition.Token;
             var recognitionTasks = new ConcurrentBag<Task>();
             List<PiPage> pieceOfDoc = new List<PiPage>();
             foreach (IFile file in dataObject.ActualFileSnapshot.Files)
             {
+                if (cancelled) break;
                 if (this.IsPdfFile(file.Name))
                 {
                     try
@@ -423,6 +299,7 @@ namespace PilotOCR
             };
             foreach (Guid child in dataObject.Children)
             {
+                if (cancelled) break;
                 Guid fileGuid = child;
                 string storagePath = this._objectsRepository.GetStoragePath(fileGuid);
                 if (this.IsPdfFile(storagePath))
@@ -461,19 +338,28 @@ namespace PilotOCR
             };
             foreach (PiPage piPage in pieceOfDoc)
             {
+                if (cancelled)
+                {
+                    ctsRecognition.Cancel();
+                    break;
+                }
                 if (piPage.image != null)
                 {
                     Task recognitionTask = _taskFactoryRecognition.StartNew(() =>
                     {
-                        piPage.text = PageToText(piPage.image);
-                        piPage.image = null;
-                    }, ctsRecognition.Token);
+                        if (!token.IsCancellationRequested)
+                        {
+                            piPage.text = PageToText(piPage.image);
+                            piPage.image = null;
+                        }
+                    }, token);
                     recognitionTasks.Add(recognitionTask);
                 }
                 piPage.docID = dataObject.Id;
                 piPage.docName = dataObject.Attributes.FirstOrDefault<KeyValuePair<string, object>>().Value.ToString();
             };
             Task.WaitAll(recognitionTasks.ToArray());
+            ctsRecognition.Dispose();
             return pieceOfDoc;
         }
 

@@ -31,14 +31,15 @@
             this.progressBar1 = new System.Windows.Forms.ProgressBar();
             this.Comment = new System.Windows.Forms.Label();
             this.cancelBtn = new System.Windows.Forms.Button();
+            this.Comment2 = new System.Windows.Forms.Label();
             this.SuspendLayout();
             // 
             // progressBar1
             // 
-            this.progressBar1.Location = new System.Drawing.Point(12, 33);
+            this.progressBar1.Location = new System.Drawing.Point(12, 78);
             this.progressBar1.Maximum = 10;
             this.progressBar1.Name = "progressBar1";
-            this.progressBar1.Size = new System.Drawing.Size(600, 23);
+            this.progressBar1.Size = new System.Drawing.Size(598, 23);
             this.progressBar1.Step = 1;
             this.progressBar1.TabIndex = 0;
             // 
@@ -56,7 +57,8 @@
             // 
             // cancelBtn
             // 
-            this.cancelBtn.Location = new System.Drawing.Point(524, 4);
+            this.cancelBtn.DialogResult = System.Windows.Forms.DialogResult.Cancel;
+            this.cancelBtn.Location = new System.Drawing.Point(537, 107);
             this.cancelBtn.Name = "cancelBtn";
             this.cancelBtn.Size = new System.Drawing.Size(75, 23);
             this.cancelBtn.TabIndex = 2;
@@ -64,16 +66,31 @@
             this.cancelBtn.UseVisualStyleBackColor = true;
             this.cancelBtn.Click += new System.EventHandler(this.cancelBtn_Click);
             // 
+            // Comment2
+            // 
+            this.Comment2.AutoSize = true;
+            this.Comment2.ImageAlign = System.Drawing.ContentAlignment.TopCenter;
+            this.Comment2.Location = new System.Drawing.Point(12, 32);
+            this.Comment2.Margin = new System.Windows.Forms.Padding(3, 0, 3, 1);
+            this.Comment2.MaximumSize = new System.Drawing.Size(598, 0);
+            this.Comment2.Name = "Comment2";
+            this.Comment2.Size = new System.Drawing.Size(0, 13);
+            this.Comment2.TabIndex = 1;
+            // 
             // ProgressDialog
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(624, 68);
+            this.ClientSize = new System.Drawing.Size(622, 142);
             this.Controls.Add(this.cancelBtn);
+            this.Controls.Add(this.Comment2);
             this.Controls.Add(this.Comment);
             this.Controls.Add(this.progressBar1);
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
             this.Name = "ProgressDialog";
+            this.ShowIcon = false;
             this.Text = "Распознавание документов";
+            this.FormClosed += new System.Windows.Forms.FormClosedEventHandler(this.ProgressDialog_FormClosed);
             this.ResumeLayout(false);
             this.PerformLayout();
 
@@ -84,5 +101,6 @@
         private System.Windows.Forms.ProgressBar progressBar1;
         private System.Windows.Forms.Label Comment;
         private System.Windows.Forms.Button cancelBtn;
+        private System.Windows.Forms.Label Comment2;
     }
 }
