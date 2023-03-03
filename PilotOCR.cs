@@ -2,7 +2,6 @@
 using Ascon.Pilot.SDK.CreateObjectSample;
 using Ascon.Pilot.SDK.Menu;
 using DocumentFormat.OpenXml;
-using DocumentFormat.OpenXml.Office2019.Excel.RichData2;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using MySql.Data.MySqlClient;
@@ -17,7 +16,6 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 //using System.Windows.Forms;
@@ -27,32 +25,104 @@ namespace PilotOCR
 {
     public class PiPage
     {
-        public Guid docID { get; set; }
-        public string docName { get; set; }
-        public string fileName { get; set; }
-        public int pageNum { get; set; }
-        public string text { get; set; }
-        public Image image { get; set; }
+        //public Guid DocID { get; set; }
+        //public string DocName { get; set; }
+        public string FileName { get; set; }
+        public int PageNum { get; set; }
+        public string Text { get; set; }
+        public Image Image { get; set; }
+        public string CorruptedFilePath { get; set; }
 
-        public PiPage()
+        public PiPage() { }
+
+        public PiPage(/*Guid docID, string docName,*/ string fileName, int pageNum, string text, Image image)
         {
-
+            //this.DocID = docID;
+            //this.DocName = docName;
+            this.FileName = fileName;
+            this.PageNum = pageNum;
+            this.Text = text;
+            this.Image = image;
         }
-        public PiPage(Guid docID, string docName, string fileName, int pageNum, string text, Image image)
+    }
+
+    public class PiLetter
+    {
+        public IDataObject DataObject { get; set; }
+        public Guid DocId { get; set; }
+        public string OutNo { get; set; }
+        public string DocDate { get; set; }
+        public string DocSubject { get; set; }
+        public string DocCorrespondent { get; set; }
+        public List<PiPage> Pages { get; set; }
+        public string Text { get; set; }
+        public List<string> CorruptedFiles { get; set; }
+        public int PagesQtt { get; set; }
+        public void SetText()
         {
-            this.docID = docID;
-            this.docName = docName;
-            this.fileName = fileName;
-            this.pageNum = pageNum;
-            this.text = text;
-            this.image = image;
+            foreach (PiPage piPage in Pages)
+            {
+                this.Text += "\n" + piPage.FileName + " " + piPage.PageNum.ToString() + ":\n\n" + piPage.Text + "\n\n=======================================================================================================================\n\n";
+            };
+            PagesQtt = Pages.Count;
         }
     }
 
 
+    public class PiLetterInbox : PiLetter
+    {
+        public string InputNo { get; set; }
 
+        public PiLetterInbox() { }
 
+        //public PiLetterInbox(Guid docId, string inputNo, string outNo, string docDate, string docSubject, string docCorrespondent)
+        //{
+        //    this.docId = docId;
+        //    this.inputNo = inputNo;
+        //    this.outNo = outNo;
+        //    this.docDate = docDate;
+        //    this.docSubject = docSubject;
+        //    this.docCorrespondent = docCorrespondent;
+        //    this.text = "";
+        //}
 
+        public void ReadAttributes()
+        {
+            foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>) DataObject.Attributes)
+            {
+                if (attribute.Value != null)
+                {
+                    Text += attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
+                    switch (attribute.Key.ToString())
+                    {
+                        case "ECM_inbound_letter_counter":
+                            InputNo = attribute.Value.ToString();
+                            break;
+                        case "ECM_inbound_letter_number":
+                            OutNo = attribute.Value.ToString();
+                            break;
+                        case "ECM_inbound_letter_sending_date":
+                            DocDate = attribute.Value.ToString();
+                            break;
+                        case "ECM_letter_subject":
+                            DocSubject = attribute.Value.ToString();
+                            break;
+                        case "ECM_letter_correspondent":
+                            DocCorrespondent = attribute.Value.ToString();
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            };
+        }
+
+    }
+
+    public class PiLetterSent : PiLetter
+    {
+
+    }
 
 
     [Export(typeof(IMenu<ObjectsViewContext>))]
@@ -68,7 +138,7 @@ namespace PilotOCR
         private readonly IObjectModifier _modifier;
         private readonly IObjectsRepository _objectsRepository;
         private readonly ObjectLoader _loader;
-        private List<Ascon.Pilot.SDK.IDataObject> _dataObjects = new List<Ascon.Pilot.SDK.IDataObject>();
+        private List<IDataObject> _dataObjects = new List<IDataObject>();
         private readonly LimitedConcurrencyLevelTaskScheduler lctsRecognition = new LimitedConcurrencyLevelTaskScheduler(8);
         private int docsCount = 0; 
         private int pagesCount = 0;
@@ -126,7 +196,6 @@ namespace PilotOCR
             ProgressDialog progressDialog = new ProgressDialog(this);
             cancelled = false;
             _taskFactoryRecognition = new TaskFactory(lctsRecognition);
-            var netTasks = new ConcurrentBag<Task>();
             docsCount = _dataObjects.Count;
             pagesCount = 0;
             _dataObjects = MakeRecognitionList(_dataObjects);
@@ -140,60 +209,21 @@ namespace PilotOCR
                     _objectsRepository.Mount(dataObject.Id);
                     await Task.Delay(50);
                 };
-                Task.WaitAll(netTasks.ToArray());
                 await Task.Delay(3000);
                 MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
                 connection.Open();
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
                     if (cancelled) break;
-                    string inputNo = "";
-                    string outNo = "";
-                    string docId = dataObject.Id.ToString();
-                    string docDate = "";
-                    string docSubject = "";
-                    string docCorrespondent = "";
-                    string str = "";
-                    List<PiPage> recognizedDoc = new List<PiPage>();
-                    Ascon.Pilot.SDK.IDataObject dataObjectMounted;
-                    dataObjectMounted = await _loader.Load(dataObject.Id);
-                    foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObjectMounted.Attributes)
-                    {
-                        if (attribute.Value != null)
-                        {
-                            str = str + attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
-                            switch (attribute.Key.ToString())
-                            {
-                                case "ECM_inbound_letter_counter":
-                                    inputNo = attribute.Value.ToString();
-                                    break;
-                                case "ECM_inbound_letter_number":
-                                    outNo = attribute.Value.ToString();
-                                    break;
-                                case "ECM_inbound_letter_sending_date":
-                                    docDate = attribute.Value.ToString();
-                                    break;
-                                case "ECM_letter_subject":
-                                    docSubject = attribute.Value.ToString();
-                                    break;
-                                case "ECM_letter_correspondent":
-                                    docCorrespondent = attribute.Value.ToString();
-                                    break;
-                                default:
-                                    break;
-                            }
-                        }
-                    };
-                    progressDialog.SetCurrentDocName(inputNo + " - " + outNo + " - " + docDate + " - " + docSubject);
-                    recognizedDoc = RecognizeWholeDoc(dataObjectMounted);
+                    PiLetterInbox piLetter = new PiLetterInbox();
+                    piLetter.DataObject = await _loader.Load(dataObject.Id);
+                    piLetter.ReadAttributes();
+                    progressDialog.SetCurrentDocName(piLetter.InputNo + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
+                    piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
                     if (cancelled) break;
-                    string contents = str + "\n";
-                    foreach (PiPage piPage in recognizedDoc)
-                    {
-                        ++pagesCount;
-                        contents = contents + piPage.fileName + " " + piPage.pageNum.ToString() + ":\n\n" + piPage.text + "\n\n=======================================================================================================================\n\n";
-                    };
-                    DocToDB(connection, inputNo, outNo, docId, docDate, docSubject, docCorrespondent, contents);
+                    piLetter.SetText();
+                    pagesCount += piLetter.PagesQtt;
+                    DocToDB(connection, piLetter.InputNo, piLetter.OutNo, piLetter.DocId.ToString(), piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text);
                     progressDialog.UpdateProgress();
                 };
 
@@ -204,7 +234,7 @@ namespace PilotOCR
             });
         }
 
-        public List<Ascon.Pilot.SDK.IDataObject> MakeRecognitionList(List<Ascon.Pilot.SDK.IDataObject> dataObjects)
+        public List<IDataObject> MakeRecognitionList(List<IDataObject> dataObjects)
         {
             List<Ascon.Pilot.SDK.IDataObject> recognitionList = new List<Ascon.Pilot.SDK.IDataObject>();
             foreach (Ascon.Pilot.SDK.IDataObject dataObject in dataObjects)
@@ -247,7 +277,7 @@ namespace PilotOCR
 
      
 
-        public List<PiPage> RecognizeWholeDoc(Ascon.Pilot.SDK.IDataObject dataObject)
+        public List<PiPage> RecognizeWholeDoc(IDataObject dataObject)
         {
             var ctsRecognition = new CancellationTokenSource();
             var token = ctsRecognition.Token;
@@ -265,18 +295,18 @@ namespace PilotOCR
                             foreach (PiPage page in this.PdfToPages(pdfStream, file.Name))
                                 pieceOfDoc.Add(page);
                             pdfStream.Close();
-                        };
+                        }
                     }
                     catch (Exception ex)
                     {
                         pieceOfDoc.Add(new PiPage()
                         {
-                            fileName = file.Name,
-                            text = "FILE IS CORRUPTED " + ex.Message
+                            FileName = file.Name,
+                            Text = "FILE IS CORRUPTED " + ex.Message
                         });
-                    };
-                };
-                if (this.IsXpsFile(file.Name))
+                    }
+                }
+                else if (this.IsXpsFile(file.Name))
                 {
                     try
                     {
@@ -285,17 +315,17 @@ namespace PilotOCR
                             foreach (PiPage page in this.XpsToPages(xpsStream, file.Name))
                                 pieceOfDoc.Add(page);
                             xpsStream.Close();
-                        };
+                        }
                     }
                     catch (Exception ex)
                     {
                         pieceOfDoc.Add(new PiPage()
                         {
-                            fileName = file.Name,
-                            text = "FILE IS CORRUPTED " + ex.Message
+                            FileName = file.Name,
+                            Text = "FILE IS CORRUPTED " + ex.Message
                         });
-                    };
-                };
+                    }
+                }
             };
             foreach (Guid child in dataObject.Children)
             {
@@ -318,45 +348,45 @@ namespace PilotOCR
                     {
                         pieceOfDoc.Add(new PiPage()
                         {
-                            fileName = fileName,
-                            text = "FILE IS CORRUPTED " + ex.Message
+                            FileName = fileName,
+                            CorruptedFilePath = storagePath,
+                            Text = "FILE IS CORRUPTED " + ex.Message
                         });
-                    };
-                };
-                if (this.IsDocFile(storagePath))
+                    }
+                }
+                else if (this.IsDocFile(storagePath))
                 {
                     pieceOfDoc.Add(DocToPage(storagePath));
-                };
-                if (this.IsTxtFile(storagePath))
+                }
+                else if (this.IsTxtFile(storagePath))
                 {
                     pieceOfDoc.Add(TxtToPage(storagePath));
-                };
-                if (this.IsXlsFile(storagePath))
+                }
+                else if (this.IsXlsFile(storagePath))
                 {
                     pieceOfDoc.Add(XlsToPage(storagePath));
-                };
+                }
             };
             foreach (PiPage piPage in pieceOfDoc)
             {
                 if (cancelled)
                 {
                     ctsRecognition.Cancel();
-                    break;
                 }
-                if (piPage.image != null)
+                else if (piPage.Image != null)
                 {
                     Task recognitionTask = _taskFactoryRecognition.StartNew(() =>
                     {
                         if (!token.IsCancellationRequested)
                         {
-                            piPage.text = PageToText(piPage.image);
-                            piPage.image = null;
+                            piPage.Text = PageToText(piPage.Image);
+                            piPage.Image = null;
                         }
                     }, token);
                     recognitionTasks.Add(recognitionTask);
                 }
-                piPage.docID = dataObject.Id;
-                piPage.docName = dataObject.Attributes.FirstOrDefault<KeyValuePair<string, object>>().Value.ToString();
+                //piPage.DocID = dataObject.Id;
+                //piPage.DocName = dataObject.Attributes.FirstOrDefault<KeyValuePair<string, object>>().Value.ToString();
             };
             Task.WaitAll(recognitionTasks.ToArray());
             ctsRecognition.Dispose();
@@ -368,8 +398,8 @@ namespace PilotOCR
         {
             string fileName = Path.GetFileName(storagePath);
             PiPage piPage = new PiPage();
-            piPage.fileName = fileName;
-            piPage.pageNum = 1;
+            piPage.FileName = fileName;
+            piPage.PageNum = 1;
             try
             {
                 using (SpreadsheetDocument spreadsheetDocument = SpreadsheetDocument.Open(storagePath, false))
@@ -390,11 +420,11 @@ namespace PilotOCR
                                         {
                                             if ((CellValues)element3.DataType == CellValues.SharedString)
                                             {
-                                                piPage.text = piPage.text + sharedStringTable.ElementAt<OpenXmlElement>(int.Parse(innerText)).InnerText + " ";
+                                                piPage.Text = piPage.Text + sharedStringTable.ElementAt<OpenXmlElement>(int.Parse(innerText)).InnerText + " ";
                                             }
                                             else
                                             {
-                                                piPage.text = piPage.text + innerText + " ";
+                                                piPage.Text = piPage.Text + innerText + " ";
                                             };
                                         };
                                     };
@@ -406,7 +436,8 @@ namespace PilotOCR
             }
             catch (Exception ex)
             {
-                piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
+                piPage.CorruptedFilePath = storagePath;
+                piPage.Text = "FILE IS CORRUPTED " + ex.Message.ToString();
                 //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
             };
             return piPage;
@@ -417,18 +448,19 @@ namespace PilotOCR
         {
             string fileName = Path.GetFileName(storagePath);
             PiPage piPage = new PiPage();
-            piPage.fileName = fileName;
-            piPage.pageNum = 1;
+            piPage.FileName = fileName;
+            piPage.PageNum = 1;
             try
             {
                 using (WordprocessingDocument wordprocessingDocument = WordprocessingDocument.Open(storagePath, false))
                 {
-                    piPage.text = wordprocessingDocument.MainDocumentPart.Document.Body.InnerText;
+                    piPage.Text = wordprocessingDocument.MainDocumentPart.Document.Body.InnerText;
                 }
             }
             catch (Exception ex)
             {
-                piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
+                piPage.CorruptedFilePath = storagePath;
+                piPage.Text = "FILE IS CORRUPTED " + ex.Message.ToString();
                 //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
             };
             return piPage;
@@ -439,15 +471,16 @@ namespace PilotOCR
         {
             string fileName = Path.GetFileName(storagePath);
             PiPage piPage = new PiPage();
-            piPage.fileName = fileName;
-            piPage.pageNum = 1;
+            piPage.FileName = fileName;
+            piPage.PageNum = 1;
             try
             {
-                piPage.text = File.ReadAllText(storagePath, Encoding.Default);
+                piPage.Text = File.ReadAllText(storagePath, Encoding.Default);
             }
             catch (Exception ex)
             {
-                piPage.text = "FILE IS CORRUPTED " + ex.Message.ToString();
+                piPage.CorruptedFilePath = storagePath;
+                piPage.Text = "FILE IS CORRUPTED " + ex.Message.ToString();
                 //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
             };
             return piPage;
@@ -461,15 +494,15 @@ namespace PilotOCR
                 for (int index = 0; index < pdfDocument1.PageCount; ++index)
                 {
                     PiPage page = new PiPage();
-                    page.pageNum = index + 1;
-                    page.fileName = fileName;
+                    page.PageNum = index + 1;
+                    page.FileName = fileName;
                     PdfDocument pdfDocument2 = pdfDocument1;
                     int page1 = index;
                     SizeF pageSiz = pdfDocument1.PageSizes[index];
                     int width = pageSiz.ToSize().Width * 2;
                     pageSiz = pdfDocument1.PageSizes[index];
                     int height = pageSiz.ToSize().Height * 2;
-                    page.image = pdfDocument2.Render(page1, width, height, 96f, 96f, false);
+                    page.Image = pdfDocument2.Render(page1, width, height, 96f, 96f, false);
                     pages.Add(page);
                 };
                 return pages;
@@ -484,36 +517,37 @@ namespace PilotOCR
             foreach (Stream stream in bitmap.ToList<Stream>())
             {
                 PiPage page = new PiPage();
-                page.image = (System.Drawing.Image)new Bitmap(stream);
-                page.pageNum = num + 1;
-                page.fileName = fileName;
+                page.Image = (System.Drawing.Image)new Bitmap(stream);
+                page.PageNum = num + 1;
+                page.FileName = fileName;
                 pages.Add(page);
                 ++num;
             };
             return pages;
         }
 
-        public string getResourcesPath()
+        public string GetResourcesPath()
         {
             string location = Assembly.GetExecutingAssembly().Location;
             int length = location.LastIndexOf('\\');
             return location.Substring(0, length);
         }
 
-        public string PageToText(System.Drawing.Image pageImg)
+        public string PageToText(Image pageImg)
         {
             string text = (string)null;
             if (pageImg != null)
             {
-                using (Engine engine = new Engine(this.getResourcesPath() + "\\tessdata\\", "rus(best)"))
+                using (Engine engine = new Engine(this.GetResourcesPath() + "\\tessdata\\", "rus(best)"))
                 {
-                    System.Drawing.Image image = (System.Drawing.Image)this.TiltDocument((Bitmap)pageImg);
+                    Image image = (Image)this.TiltDocument((Bitmap)pageImg);
                     //Random random = new Random();
                     using (MemoryStream memoryStream = new MemoryStream())
                     {
                         image.Save((Stream)memoryStream, ImageFormat.Png);
                         using (TesseractOCR.Page page = engine.Process(TesseractOCR.Pix.Image.LoadFromMemory(memoryStream)))
-                            text = Regex.Replace(Regex.Replace(page.Text, " +", " "), "(?<!\\d)-+[ +]?\\n+[ +]?|(?<=[\\d\\wа-яА-я])\\s+(?=\\.)|(?<=\\.)\\s+(?=\\d)", "");
+                            //text = Regex.Replace(Regex.Replace(page.Text, " +", " "), "(?<!\\d)-+[ +]?\\n+[ +]?|(?<=[\\d\\wа-яА-я])\\s+(?=\\.)|(?<=\\.)\\s+(?=\\d)", "");
+                            text = page.Text;
                     };
                 };
             };
@@ -540,7 +574,12 @@ namespace PilotOCR
             command.Parameters.AddWithValue("@docCorrespondent", docCorrespondent);
             command.Parameters.AddWithValue("@docText", docText);
             //MessageBox.Show(commandText);
+            try
+            {
+
             command.ExecuteNonQuery();
+            }
+            catch (MySqlException ex){ System.Windows.Forms.MessageBox.Show(ex.Message); };
             //    MessageBox.Show("Data Inserted");
             //else
             //    MessageBox.Show("Failed");
@@ -557,14 +596,14 @@ namespace PilotOCR
             Bitmap bitmap3 = inputPic.Clone(rect, inputPic.PixelFormat);
             //Task graphicsTask = _taskFactoryGrapgic.StartNew(() =>
             //{
-                using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)inputBmp))
-                    graphics.DrawImage((System.Drawing.Image)bitmap3, 0, 0, inputBmp.Width, inputBmp.Height);
+                using (Graphics graphics = Graphics.FromImage((Image)inputBmp))
+                    graphics.DrawImage((Image)bitmap3, 0, 0, inputBmp.Width, inputBmp.Height);
                 float angle = this.GetOptimumAngle(inputBmp, 10f, 1f) + this.GetOptimumAngle(inputBmp, 1.25f, 0.25f);
-                using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)bitmap2))
+                using (Graphics graphics = Graphics.FromImage((Image)bitmap2))
                 {
                     graphics.RotateTransform(angle);
                     graphics.Clear(System.Drawing.Color.White);
-                    graphics.DrawImage((System.Drawing.Image)inputPic, (int)((double)inputPic.Height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)((double)inputPic.Width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
+                    graphics.DrawImage((Image)inputPic, (int)((double)inputPic.Height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)((double)inputPic.Width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
                 };
             //}, ctsGrapgic.Token);
             //graphicsTask.Wait();
@@ -582,14 +621,14 @@ namespace PilotOCR
             {
                 int num2 = 765;
                 Bitmap bitmap2 = new Bitmap(width, height);
-                using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)bitmap2))
+                using (Graphics graphics = Graphics.FromImage((Image)bitmap2))
                 {
                     graphics.RotateTransform(num1);
                     graphics.Clear(System.Drawing.Color.White);
-                    graphics.DrawImage((System.Drawing.Image)inputBmp, (int)((double)height * Math.Sin((double)num1 * 3.1415 / 180.0) * 0.5), -(int)((double)width * Math.Sin((double)num1 * 3.1415 / 180.0) * 0.5));
+                    graphics.DrawImage((Image)inputBmp, (int)((double)height * Math.Sin((double)num1 * 3.1415 / 180.0) * 0.5), -(int)((double)width * Math.Sin((double)num1 * 3.1415 / 180.0) * 0.5));
                 };
-                using (Graphics graphics = Graphics.FromImage((System.Drawing.Image)bitmap1))
-                    graphics.DrawImage((System.Drawing.Image)bitmap2, 0, 0, 1, height);
+                using (Graphics graphics = Graphics.FromImage((Image)bitmap1))
+                    graphics.DrawImage((Image)bitmap2, 0, 0, 1, height);
                 for (int y = 0; y < height; ++y)
                 {
                     int[] numArray2 = numArray1;
