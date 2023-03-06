@@ -2,6 +2,7 @@
 using Ascon.Pilot.SDK.CreateObjectSample;
 using Ascon.Pilot.SDK.Menu;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Bibliography;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using MySql.Data.MySqlClient;
@@ -10,6 +11,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -49,7 +51,7 @@ namespace PilotOCR
     public class PiLetter
     {
         public IDataObject DataObject { get; set; }
-        public Guid DocId { get; set; }
+        public string DocId { get; set; }
         public string OutNo { get; set; }
         public string DocDate { get; set; }
         public string DocSubject { get; set; }
@@ -196,9 +198,9 @@ namespace PilotOCR
             ProgressDialog progressDialog = new ProgressDialog(this);
             cancelled = false;
             _taskFactoryRecognition = new TaskFactory(lctsRecognition);
-            docsCount = _dataObjects.Count;
             pagesCount = 0;
             _dataObjects = MakeRecognitionList(_dataObjects);
+            docsCount = _dataObjects.Count;
             progressDialog.SetMax(_dataObjects.Count);
             Task progressDialogTask = Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
             Task.Run(async () =>
@@ -217,6 +219,7 @@ namespace PilotOCR
                     if (cancelled) break;
                     PiLetterInbox piLetter = new PiLetterInbox();
                     piLetter.DataObject = await _loader.Load(dataObject.Id);
+                    piLetter.DocId = dataObject.Id.ToString();
                     piLetter.ReadAttributes();
                     progressDialog.SetCurrentDocName(piLetter.InputNo + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
                     piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
@@ -236,7 +239,13 @@ namespace PilotOCR
 
         public List<IDataObject> MakeRecognitionList(List<IDataObject> dataObjects)
         {
-            List<Ascon.Pilot.SDK.IDataObject> recognitionList = new List<Ascon.Pilot.SDK.IDataObject>();
+            //string letterNumbers = "";
+            //string letterDates = "";
+            string searchConditions = "";
+            string letterNumber = "";
+            string letterDate = "";
+            List<string> existingNumbers = new List<string>();
+            var recognitionDict = new Dictionary<string, IDataObject>();
             foreach (Ascon.Pilot.SDK.IDataObject dataObject in dataObjects)
             {
                 if (dataObject.Attributes.Count < 1 || !dataObject.Type.IsMountable)
@@ -269,10 +278,40 @@ namespace PilotOCR
                 //if (File.Exists(fullFileName) || File.Exists(PATH + letterInboxNum + ".txt"))
                 //    continue;
                 //dataObject.Attributes.Add("fullFileName", fullFileName);
-                recognitionList.Add(dataObject);
+                foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObject.Attributes)
+                {
 
+                    if (attribute.Value != null)
+                        if (attribute.Key == "ECM_inbound_letter_counter")
+                        {
+                            letterNumber = attribute.Value.ToString();
+                            //letterNumbers += letterNumber + ", ";
+                        }
+                        else if (attribute.Key == "ECM_inbound_letter_sending_date")
+                        {
+                            letterDate = attribute.Value.ToString();
+                            //letterDates += attribute.Value.ToString();
+                        }
+                };
+                searchConditions += $"(input_no = '{letterNumber}' and date = '{letterDate}') or ";
+                recognitionDict.Add(letterNumber, dataObject);
             }
-            return recognitionList;
+            MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
+            connection.Open();
+            using (var command = new MySqlCommand($"select input_no from pilotsql.inbox where {searchConditions.Remove(searchConditions.Length - 4)}", connection))
+            {
+                //Debug.WriteLine(command.CommandText);
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        //existingNumbers.Add(reader.GetString(0));
+                        recognitionDict.Remove(reader.GetString(0));
+                    }
+                }
+            };
+            connection.Close();
+            return recognitionDict.Values.ToList();
         }
 
      
