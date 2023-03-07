@@ -3,6 +3,7 @@ using Ascon.Pilot.SDK.CreateObjectSample;
 using Ascon.Pilot.SDK.Menu;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Bibliography;
+using DocumentFormat.OpenXml.Office.Word;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using MySql.Data.MySqlClient;
@@ -51,6 +52,7 @@ namespace PilotOCR
     public class PiLetter
     {
         public IDataObject DataObject { get; set; }
+        public string LetterCounter { get; set; }
         public string DocId { get; set; }
         public string OutNo { get; set; }
         public string DocDate { get; set; }
@@ -71,11 +73,9 @@ namespace PilotOCR
     }
 
 
-    public class PiLetterInbox : PiLetter
+    public class PiLetterInbound : PiLetter
     {
-        public string InputNo { get; set; }
-
-        public PiLetterInbox() { }
+        public PiLetterInbound() { }
 
         //public PiLetterInbox(Guid docId, string inputNo, string outNo, string docDate, string docSubject, string docCorrespondent)
         //{
@@ -98,7 +98,7 @@ namespace PilotOCR
                     switch (attribute.Key.ToString())
                     {
                         case "ECM_inbound_letter_counter":
-                            InputNo = attribute.Value.ToString();
+                            LetterCounter = attribute.Value.ToString();
                             break;
                         case "ECM_inbound_letter_number":
                             OutNo = attribute.Value.ToString();
@@ -123,7 +123,40 @@ namespace PilotOCR
 
     public class PiLetterSent : PiLetter
     {
+        public PiLetterSent() { }
 
+        public void ReadAttributes()
+        {
+            foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)DataObject.Attributes)
+            {
+                if (attribute.Value != null)
+                {
+                    Text += attribute.Key.ToString() + ":\n     " + attribute.Value.ToString() + "\n";
+                    switch (attribute.Key.ToString())
+                    {
+                        case "ECM_letter_counter":
+                            LetterCounter = attribute.Value.ToString();
+                            break;
+                        case "ECM_letter_number":
+                            OutNo = attribute.Value.ToString();
+                            break;
+                        case "ECM_letter_date":
+                            DocDate = attribute.Value.ToString();
+                            break;
+                        case "ECM_letter_subject":
+                            DocSubject = attribute.Value.ToString();
+                            break;
+                        case "ECM_letter_correspondent":
+                            DocCorrespondent = attribute.Value.ToString();
+                            break;
+                        default:
+                            break;
+                    }
+                    if (LetterCounter == null)
+                        LetterCounter = OutNo;
+                }
+            };
+        }
     }
 
 
@@ -133,7 +166,8 @@ namespace PilotOCR
     public class ModifyObjectsPlugin : IMenu<ObjectsViewContext>
     {
         private const string CONNECTION_PARAMETERS = "datasource=localhost;port=3306;username=root;password=C@L0P$Ck;charset=utf8";
-//        private const string PATH = "D:\\TEMP\\Recognized\\";
+        private readonly List<string> ACCEPTABLE_DOC_TYPES = new List<string>{ "ECM_letter_inbound", "ECM_incoming_service_note", "ECM_letter", "ECM_outcoming_service_note"};
+        //        private const string PATH = "D:\\TEMP\\Recognized\\";
         private TaskFactory _taskFactoryRecognition;
         private readonly IXpsRender _xpsRender;
         private readonly IFileProvider _fileProvider;
@@ -195,21 +229,28 @@ namespace PilotOCR
 
             if (!(name == "RecognizeItemName"))
                 return;
+            docsCount = 0;
             ProgressDialog progressDialog = new ProgressDialog(this);
             cancelled = false;
             _taskFactoryRecognition = new TaskFactory(lctsRecognition);
             pagesCount = 0;
             _dataObjects = MakeRecognitionList(_dataObjects);
-            docsCount = _dataObjects.Count;
             progressDialog.SetMax(_dataObjects.Count);
             Task progressDialogTask = Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
             Task.Run(async () =>
             {
+                
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
-                    if (cancelled) break;
-                    _objectsRepository.Mount(dataObject.Id);
-                    await Task.Delay(50);
+                    if (cancelled)
+                        break;
+                    else if (!ACCEPTABLE_DOC_TYPES.Contains(dataObject.Type.Name))
+                        continue;
+                    else
+                    {
+                        _objectsRepository.Mount(dataObject.Id);
+                        //await Task.Delay(50);
+                    }
                 };
                 await Task.Delay(3000);
                 MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
@@ -217,17 +258,34 @@ namespace PilotOCR
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
                     if (cancelled) break;
-                    PiLetterInbox piLetter = new PiLetterInbox();
-                    piLetter.DataObject = await _loader.Load(dataObject.Id);
-                    piLetter.DocId = dataObject.Id.ToString();
-                    piLetter.ReadAttributes();
-                    progressDialog.SetCurrentDocName(piLetter.InputNo + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
-                    piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
-                    if (cancelled) break;
-                    piLetter.SetText();
-                    pagesCount += piLetter.PagesQtt;
-                    DocToDB(connection, piLetter.InputNo, piLetter.OutNo, piLetter.DocId.ToString(), piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text);
+                    else if (ACCEPTABLE_DOC_TYPES.GetRange(0,2).Contains(dataObject.Type.Name))
+                    {
+                        PiLetterInbound piLetter = new PiLetterInbound();
+                        piLetter.DataObject = await _loader.Load(dataObject.Id);
+                        piLetter.DocId = dataObject.Id.ToString();
+                        piLetter.ReadAttributes();
+                        progressDialog.SetCurrentDocName(piLetter.LetterCounter + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
+                        piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
+                        if (cancelled) break;
+                        piLetter.SetText();
+                        pagesCount += piLetter.PagesQtt;
+                        DocToDB(connection, "inbox", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text);
+                    }
+                    else
+                    {
+                        PiLetterSent piLetter = new PiLetterSent();
+                        piLetter.DataObject = await _loader.Load(dataObject.Id);
+                        piLetter.DocId = dataObject.Id.ToString();
+                        piLetter.ReadAttributes();
+                        progressDialog.SetCurrentDocName(piLetter.LetterCounter + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
+                        piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
+                        if (cancelled) break;
+                        piLetter.SetText();
+                        pagesCount += piLetter.PagesQtt;
+                        DocToDB(connection, "sent", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text);
+                    }
                     progressDialog.UpdateProgress();
+                    docsCount++;
                 };
 
                 connection.Close();
@@ -241,72 +299,51 @@ namespace PilotOCR
         {
             //string letterNumbers = "";
             //string letterDates = "";
+            string tableName = "";
             string searchConditions = "";
-            string letterNumber = "";
+            string letterCounter = "";
             string letterDate = "";
-            List<string> existingNumbers = new List<string>();
+            string docNumType = "";
+            string docDateType = "";
             var recognitionDict = new Dictionary<string, IDataObject>();
             foreach (Ascon.Pilot.SDK.IDataObject dataObject in dataObjects)
             {
                 if (dataObject.Attributes.Count < 1 || !dataObject.Type.IsMountable)
                     continue;
-                //object letterSubject;
-                //object letterDate;
-                //string fullFileName = "";
-                //string letterInboxNum = dataObject.Attributes.FirstOrDefault().Value.ToString();
-                //bool letterSubjectExists = dataObject.Attributes.TryGetValue("ECM_letter_subject", out letterSubject);
-                //bool letterDateExists = dataObject.Attributes.TryGetValue("ECM_inbound_letter_sending_date", out letterDate);
-                //if (letterSubjectExists & letterDateExists)
-                //    fullFileName = PATH
-                //                    + letterInboxNum
-                //                    + " - " + letterDate.ToString().Substring(0, 10)
-                //                    + " - " + letterSubject.ToString().Replace('/', '-').Replace('|', '-').Replace('*', ' ').Replace('\\', '-')
-                //                                                    .Replace('"', ' ').Replace('?', ' ').Replace('\t', ' ')
-                //                                                    .Replace('<', ' ')
-                //                                                    .Replace('>', ' ')
-                //                                                    .Replace(':', ' ') + ".txt";
-                //else if (letterSubjectExists)
-                //    fullFileName = PATH
-                //        + letterInboxNum + " - " 
-                //        + letterSubject.ToString().Replace('/', '-').Replace('|', '-').Replace('*', ' ').Replace('\\', '-')
-                //                                                    .Replace('"', ' ').Replace('?', ' ').Replace('\t', ' ')
-                //                                                    .Replace('<', ' ')
-                //                                                    .Replace('>', ' ')
-                //                                                    .Replace(':', ' ') + ".txt";
-                //else
-                //    fullFileName = PATH + letterInboxNum + ".txt";
-                //if (File.Exists(fullFileName) || File.Exists(PATH + letterInboxNum + ".txt"))
-                //    continue;
-                //dataObject.Attributes.Add("fullFileName", fullFileName);
+                if (ACCEPTABLE_DOC_TYPES.GetRange(0, 2).Contains(dataObject.Type.Name))
+                {
+                    docDateType = "ECM_inbound_letter_sending_date";
+                    docNumType = "ECM_inbound_letter_counter";
+                    tableName = "inbox";
+                }
+                else
+                {
+                    docDateType = "ECM_letter_date";
+                    docNumType = "ECM_letter_counter";
+                    tableName = "sent";
+                }
+
                 foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObject.Attributes)
                 {
-
                     if (attribute.Value != null)
-                        if (attribute.Key == "ECM_inbound_letter_counter")
-                        {
-                            letterNumber = attribute.Value.ToString();
-                            //letterNumbers += letterNumber + ", ";
-                        }
-                        else if (attribute.Key == "ECM_inbound_letter_sending_date")
-                        {
+                        if (attribute.Key == docNumType)
+                            letterCounter = attribute.Value.ToString();
+                        else if (attribute.Key == docDateType)
                             letterDate = attribute.Value.ToString();
-                            //letterDates += attribute.Value.ToString();
-                        }
                 };
-                searchConditions += $"(input_no = '{letterNumber}' and date = '{letterDate}') or ";
-                recognitionDict.Add(letterNumber, dataObject);
+                searchConditions += $"(letter_counter = '{letterCounter}' and date = '{letterDate}') or ";
+                recognitionDict.Add(letterCounter + letterDate, dataObject);
             }
             MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
             connection.Open();
-            using (var command = new MySqlCommand($"select input_no from pilotsql.inbox where {searchConditions.Remove(searchConditions.Length - 4)}", connection))
+            using (var command = new MySqlCommand($"select letter_counter, date from pilotsql.{tableName} where {searchConditions.Remove(searchConditions.Length - 4)}", connection))
             {
                 //Debug.WriteLine(command.CommandText);
                 using (var reader = command.ExecuteReader())
                 {
                     while (reader.Read())
                     {
-                        //existingNumbers.Add(reader.GetString(0));
-                        recognitionDict.Remove(reader.GetString(0));
+                        recognitionDict.Remove(reader.GetString(0)+reader.GetString(1));
                     }
                 }
             };
@@ -593,7 +630,7 @@ namespace PilotOCR
             return text;
         }
 
-        private void DocToDB(MySqlConnection connection, string inputNo, string outNo, string docId, string docDate, string docSubject, string docCorrespondent, string docText)
+        private void DocToDB(MySqlConnection connection, string tableName, string letterCounter, string outNo, string docId, string docDate, string docSubject, string docCorrespondent, string docText)
         {
             docText = MySqlHelper.EscapeString(docText);
             outNo = MySqlHelper.EscapeString(outNo);
@@ -601,18 +638,18 @@ namespace PilotOCR
             docDate = MySqlHelper.EscapeString(docDate);
             docSubject = MySqlHelper.EscapeString(docSubject);
             docCorrespondent = MySqlHelper.EscapeString(docCorrespondent);
+            string commandText;
             //docSubject = docSubject.Replace("'", " ").Replace("\"", " ");
-            string commandText = "INSERT INTO pilotsql.inbox(input_no, out_no, doc_id, date, subject, correspondent, text) VALUES (@inputNo, @outNo, @docId, @docDate, @docSubject, @docCorrespondent, @docText)";
-
+            commandText = $"INSERT INTO pilotsql.{tableName}(letter_counter, out_no, doc_id, date, subject, correspondent, text) VALUES (@letterCounter, @outNo, @docId, @docDate, @docSubject, @docCorrespondent, @docText)";
             MySqlCommand command = new MySqlCommand(commandText, connection);
-            command.Parameters.AddWithValue("@inputNo", inputNo);
+            command.Parameters.AddWithValue("@letterCounter", letterCounter);
             command.Parameters.AddWithValue("@outNo", outNo);
             command.Parameters.AddWithValue("@docId", docId);
             command.Parameters.AddWithValue("@docDate", docDate);
             command.Parameters.AddWithValue("@docSubject", docSubject);
             command.Parameters.AddWithValue("@docCorrespondent", docCorrespondent);
             command.Parameters.AddWithValue("@docText", docText);
-            //MessageBox.Show(commandText);
+            //System.Windows.Forms.MessageBox.Show(commandText);
             try
             {
 
