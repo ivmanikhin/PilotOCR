@@ -60,7 +60,7 @@ namespace PilotOCR
         public string DocCorrespondent { get; set; }
         public List<PiPage> Pages { get; set; }
         public string Text { get; set; }
-        public List<string> CorruptedFiles { get; set; }
+        public string CorruptedFiles { get; set; }
         public int PagesQtt { get; set; }
         public void SetText()
         {
@@ -69,6 +69,18 @@ namespace PilotOCR
                 this.Text += "\n" + piPage.FileName + " " + piPage.PageNum.ToString() + ":\n\n" + piPage.Text + "\n\n=======================================================================================================================\n\n";
             };
             PagesQtt = Pages.Count;
+        }
+
+        public void SetCorruptedFiles()
+        {
+            foreach (PiPage piPage in Pages)
+            {
+                if (piPage.CorruptedFilePath != null)
+                {
+                    if (CorruptedFiles == null) CorruptedFiles = piPage.CorruptedFilePath + "\n";
+                    else CorruptedFiles += piPage.CorruptedFilePath;
+                }
+            }
         }
     }
 
@@ -179,6 +191,7 @@ namespace PilotOCR
         private int docsCount = 0; 
         private int pagesCount = 0;
         private bool cancelled = false;
+        private bool isBusy = false;
 
 
         [ImportingConstructor]
@@ -198,7 +211,7 @@ namespace PilotOCR
             this._dataObjects = context.SelectedObjects.ToList<Ascon.Pilot.SDK.IDataObject>();
             if (this._dataObjects.Count<Ascon.Pilot.SDK.IDataObject>() < 1)
                 return;
-            builder.AddItem("RecognizeItemName", 0).WithHeader("Распознать");
+            builder.AddItem("RecognizeItemName", 0).WithHeader("Распознать").WithIsEnabled(!isBusy);
         }
 
         private bool IsXpsFile(string fileName) => Path.GetExtension(fileName) == ".xps";
@@ -236,10 +249,12 @@ namespace PilotOCR
             pagesCount = 0;
             _dataObjects = MakeRecognitionList(_dataObjects);
             progressDialog.SetMax(_dataObjects.Count);
+            //connection.Open();
             Task progressDialogTask = Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
+            
             Task.Run(async () =>
             {
-                
+                isBusy = true;
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
                     if (cancelled)
@@ -253,8 +268,8 @@ namespace PilotOCR
                     }
                 };
                 await Task.Delay(3000);
-                MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
-                connection.Open();
+                
+
                 foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                 {
                     if (cancelled) break;
@@ -268,8 +283,9 @@ namespace PilotOCR
                         piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
                         if (cancelled) break;
                         piLetter.SetText();
+                        piLetter.SetCorruptedFiles();
                         pagesCount += piLetter.PagesQtt;
-                        DocToDB(connection, "inbox", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text);
+                        DocToDB("inbox", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text, piLetter.CorruptedFiles);
                     }
                     else
                     {
@@ -281,16 +297,17 @@ namespace PilotOCR
                         piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
                         if (cancelled) break;
                         piLetter.SetText();
+                        piLetter.SetCorruptedFiles();
                         pagesCount += piLetter.PagesQtt;
-                        DocToDB(connection, "sent", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text);
+                        DocToDB("sent", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text, piLetter.CorruptedFiles);
                     }
                     progressDialog.UpdateProgress();
                     docsCount++;
                 };
-
-                connection.Close();
+                //connection.Close();
                 System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц распознано\n в " + _dataObjects.Count.ToString() + " документах");
                 pagesCount = 0;
+                isBusy = false;
                 if (!cancelled) progressDialog.CloseRemotely();
             });
         }
@@ -305,6 +322,7 @@ namespace PilotOCR
             string letterDate = "";
             string docNumType = "";
             string docDateType = "";
+            MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
             var recognitionDict = new Dictionary<string, IDataObject>();
             foreach (Ascon.Pilot.SDK.IDataObject dataObject in dataObjects)
             {
@@ -334,7 +352,6 @@ namespace PilotOCR
                 searchConditions += $"(letter_counter = '{letterCounter}' and date = '{letterDate}') or ";
                 recognitionDict.Add(letterCounter + letterDate, dataObject);
             }
-            MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
             connection.Open();
             using (var command = new MySqlCommand($"select letter_counter, date from pilotsql.{tableName} where {searchConditions.Remove(searchConditions.Length - 4)}", connection))
             {
@@ -378,6 +395,7 @@ namespace PilotOCR
                         pieceOfDoc.Add(new PiPage()
                         {
                             FileName = file.Name,
+                            CorruptedFilePath = file.Name,
                             Text = "FILE IS CORRUPTED " + ex.Message
                         });
                     }
@@ -398,6 +416,7 @@ namespace PilotOCR
                         pieceOfDoc.Add(new PiPage()
                         {
                             FileName = file.Name,
+                            CorruptedFilePath = file.Name,
                             Text = "FILE IS CORRUPTED " + ex.Message
                         });
                     }
@@ -425,7 +444,7 @@ namespace PilotOCR
                         pieceOfDoc.Add(new PiPage()
                         {
                             FileName = fileName,
-                            CorruptedFilePath = storagePath,
+                            CorruptedFilePath = fileName,
                             Text = "FILE IS CORRUPTED " + ex.Message
                         });
                     }
@@ -473,9 +492,11 @@ namespace PilotOCR
         private PiPage XlsToPage(string storagePath)
         {
             string fileName = Path.GetFileName(storagePath);
-            PiPage piPage = new PiPage();
-            piPage.FileName = fileName;
-            piPage.PageNum = 1;
+            PiPage piPage = new PiPage
+            {
+                FileName = fileName,
+                PageNum = 1
+            };
             try
             {
                 using (SpreadsheetDocument spreadsheetDocument = SpreadsheetDocument.Open(storagePath, false))
@@ -512,8 +533,8 @@ namespace PilotOCR
             }
             catch (Exception ex)
             {
-                piPage.CorruptedFilePath = storagePath;
-                piPage.Text = "FILE IS CORRUPTED " + ex.Message.ToString();
+                piPage.CorruptedFilePath = fileName;
+                piPage.Text = "FILE IS CORRUPTED " + ex.Message;
                 //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
             };
             return piPage;
@@ -535,7 +556,7 @@ namespace PilotOCR
             }
             catch (Exception ex)
             {
-                piPage.CorruptedFilePath = storagePath;
+                piPage.CorruptedFilePath = fileName;
                 piPage.Text = "FILE IS CORRUPTED " + ex.Message.ToString();
                 //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
             };
@@ -555,8 +576,8 @@ namespace PilotOCR
             }
             catch (Exception ex)
             {
-                piPage.CorruptedFilePath = storagePath;
-                piPage.Text = "FILE IS CORRUPTED " + ex.Message.ToString();
+                piPage.CorruptedFilePath = fileName;
+                piPage.Text = "FILE IS CORRUPTED " + ex.Message;
                 //System.Windows.Forms.MessageBox.Show("File corrupted in\n" + piPage.docID.ToString() + " " + piPage.fileName);
             };
             return piPage;
@@ -569,9 +590,11 @@ namespace PilotOCR
             {
                 for (int index = 0; index < pdfDocument1.PageCount; ++index)
                 {
-                    PiPage page = new PiPage();
-                    page.PageNum = index + 1;
-                    page.FileName = fileName;
+                    PiPage page = new PiPage
+                    {
+                        PageNum = index + 1,
+                        FileName = fileName
+                    };
                     PdfDocument pdfDocument2 = pdfDocument1;
                     int page1 = index;
                     SizeF pageSiz = pdfDocument1.PageSizes[index];
@@ -630,17 +653,25 @@ namespace PilotOCR
             return text;
         }
 
-        private void DocToDB(MySqlConnection connection, string tableName, string letterCounter, string outNo, string docId, string docDate, string docSubject, string docCorrespondent, string docText)
+        private void DocToDB(string tableName, string letterCounter, string outNo, string docId, string docDate, string docSubject, string docCorrespondent, string docText, string corruptedFiles)
         {
-            docText = MySqlHelper.EscapeString(docText);
-            outNo = MySqlHelper.EscapeString(outNo);
-            docId = MySqlHelper.EscapeString(docId);
-            docDate = MySqlHelper.EscapeString(docDate);
-            docSubject = MySqlHelper.EscapeString(docSubject);
-            docCorrespondent = MySqlHelper.EscapeString(docCorrespondent);
-            string commandText;
-            //docSubject = docSubject.Replace("'", " ").Replace("\"", " ");
-            commandText = $"INSERT INTO pilotsql.{tableName}(letter_counter, out_no, doc_id, date, subject, correspondent, text) VALUES (@letterCounter, @outNo, @docId, @docDate, @docSubject, @docCorrespondent, @docText)";
+            if (docText != null)
+                docText = MySqlHelper.EscapeString(docText);
+            if (outNo != null)
+                outNo = MySqlHelper.EscapeString(outNo);
+            if (docId != null)
+                docId = MySqlHelper.EscapeString(docId);
+            if (docDate != null)
+                docDate = MySqlHelper.EscapeString(docDate);
+            if (docSubject != null)
+                docSubject = MySqlHelper.EscapeString(docSubject);
+            if (docCorrespondent != null)
+                docCorrespondent = MySqlHelper.EscapeString(docCorrespondent);
+            if (corruptedFiles != null)
+                corruptedFiles = MySqlHelper.EscapeString(corruptedFiles);
+            MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
+            connection.Open();
+            string commandText = $"INSERT INTO pilotsql.{tableName}(letter_counter, out_no, doc_id, date, subject, correspondent, text, unrecognized) VALUES (@letterCounter, @outNo, @docId, @docDate, @docSubject, @docCorrespondent, @docText, @corruptedFiles)";
             MySqlCommand command = new MySqlCommand(commandText, connection);
             command.Parameters.AddWithValue("@letterCounter", letterCounter);
             command.Parameters.AddWithValue("@outNo", outNo);
@@ -649,16 +680,18 @@ namespace PilotOCR
             command.Parameters.AddWithValue("@docSubject", docSubject);
             command.Parameters.AddWithValue("@docCorrespondent", docCorrespondent);
             command.Parameters.AddWithValue("@docText", docText);
+            command.Parameters.AddWithValue("@corruptedFiles", corruptedFiles);
             //System.Windows.Forms.MessageBox.Show(commandText);
             try
             {
 
-            command.ExecuteNonQuery();
+                command.ExecuteNonQuery();
             }
             catch (MySqlException ex){ System.Windows.Forms.MessageBox.Show(ex.Message); };
             //    MessageBox.Show("Data Inserted");
             //else
             //    MessageBox.Show("Failed");
+            connection.Close();
             
         }
 
