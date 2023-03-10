@@ -212,6 +212,7 @@ namespace PilotOCR
             if (this._dataObjects.Count<Ascon.Pilot.SDK.IDataObject>() < 1)
                 return;
             builder.AddItem("RecognizeItemName", 0).WithHeader("Распознать").WithIsEnabled(!isBusy);
+            builder.AddItem("SearchByContent", 0).WithHeader("Поиск по тексту"); //временное решение
         }
 
         private bool IsXpsFile(string fileName) => Path.GetExtension(fileName) == ".xps";
@@ -239,77 +240,78 @@ namespace PilotOCR
 
         public void OnMenuItemClick(string name, ObjectsViewContext context)
         {
-
-            if (!(name == "RecognizeItemName"))
-                return;
-            docsCount = 0;
-            ProgressDialog progressDialog = new ProgressDialog(this);
-            cancelled = false;
-            _taskFactoryRecognition = new TaskFactory(lctsRecognition);
-            pagesCount = 0;
-            _dataObjects = MakeRecognitionList(_dataObjects);
-            progressDialog.SetMax(_dataObjects.Count);
-            //connection.Open();
-            Task progressDialogTask = Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
-            
-            Task.Run(async () =>
+            if (name == "RecognizeItemName")
             {
-                isBusy = true;
-                foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
-                {
-                    if (cancelled)
-                        break;
-                    else if (!ACCEPTABLE_DOC_TYPES.Contains(dataObject.Type.Name))
-                        continue;
-                    else
-                    {
-                        _objectsRepository.Mount(dataObject.Id);
-                        //await Task.Delay(50);
-                    }
-                };
-                await Task.Delay(3000);
-                
-
-                foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
-                {
-                    if (cancelled) break;
-                    else if (ACCEPTABLE_DOC_TYPES.GetRange(0,2).Contains(dataObject.Type.Name))
-                    {
-                        PiLetterInbound piLetter = new PiLetterInbound();
-                        piLetter.DataObject = await _loader.Load(dataObject.Id);
-                        piLetter.DocId = dataObject.Id.ToString();
-                        piLetter.ReadAttributes();
-                        progressDialog.SetCurrentDocName(piLetter.LetterCounter + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
-                        piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
-                        if (cancelled) break;
-                        piLetter.SetText();
-                        piLetter.SetCorruptedFiles();
-                        pagesCount += piLetter.PagesQtt;
-                        DocToDB("inbox", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text, piLetter.CorruptedFiles);
-                    }
-                    else
-                    {
-                        PiLetterSent piLetter = new PiLetterSent();
-                        piLetter.DataObject = await _loader.Load(dataObject.Id);
-                        piLetter.DocId = dataObject.Id.ToString();
-                        piLetter.ReadAttributes();
-                        progressDialog.SetCurrentDocName(piLetter.LetterCounter + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
-                        piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
-                        if (cancelled) break;
-                        piLetter.SetText();
-                        piLetter.SetCorruptedFiles();
-                        pagesCount += piLetter.PagesQtt;
-                        DocToDB("sent", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text, piLetter.CorruptedFiles);
-                    }
-                    progressDialog.UpdateProgress();
-                    docsCount++;
-                };
-                //connection.Close();
-                System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц распознано\n в " + _dataObjects.Count.ToString() + " документах");
+                docsCount = 0;
+                ProgressDialog progressDialog = new ProgressDialog(this);
+                cancelled = false;
+                _taskFactoryRecognition = new TaskFactory(lctsRecognition);
                 pagesCount = 0;
-                isBusy = false;
-                if (!cancelled) progressDialog.CloseRemotely();
-            });
+                _dataObjects = MakeRecognitionList(_dataObjects);
+                progressDialog.SetMax(_dataObjects.Count);
+                Task progressDialogTask = Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
+                Task.Run(async () =>
+                {
+                    isBusy = true;
+                    foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
+                    {
+                        if (cancelled)
+                            break;
+                        else if (!ACCEPTABLE_DOC_TYPES.Contains(dataObject.Type.Name))
+                            continue;
+                        else
+                        {
+                            _objectsRepository.Mount(dataObject.Id);
+                        }
+                    };
+                    await Task.Delay(3000);
+ 
+                    foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
+                    {
+                        if (cancelled) break;
+                        else if (ACCEPTABLE_DOC_TYPES.GetRange(0,2).Contains(dataObject.Type.Name))
+                        {
+                            PiLetterInbound piLetter = new PiLetterInbound();
+                            piLetter.DataObject = await _loader.Load(dataObject.Id);
+                            piLetter.DocId = dataObject.Id.ToString();
+                            piLetter.ReadAttributes();
+                            progressDialog.SetCurrentDocName(piLetter.LetterCounter + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
+                            piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
+                            if (cancelled) break;
+                            piLetter.SetText();
+                            piLetter.SetCorruptedFiles();
+                            pagesCount += piLetter.PagesQtt;
+                            DocToDB("inbox", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text, piLetter.CorruptedFiles);
+                        }
+                        else
+                        {
+                            PiLetterSent piLetter = new PiLetterSent();
+                            piLetter.DataObject = await _loader.Load(dataObject.Id);
+                            piLetter.DocId = dataObject.Id.ToString();
+                            piLetter.ReadAttributes();
+                            progressDialog.SetCurrentDocName(piLetter.LetterCounter + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
+                            piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
+                            if (cancelled) break;
+                            piLetter.SetText();
+                            piLetter.SetCorruptedFiles();
+                            pagesCount += piLetter.PagesQtt;
+                            DocToDB("sent", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text, piLetter.CorruptedFiles);
+                        }
+                        progressDialog.UpdateProgress();
+                        docsCount++;
+                    };
+                    //connection.Close();
+                    System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц распознано\n в " + _dataObjects.Count.ToString() + " документах");
+                    pagesCount = 0;
+                    isBusy = false;
+                    if (!cancelled) progressDialog.CloseRemotely();
+                });
+            }
+            if (name == "SearchByContent")
+            {
+                SearchByContext searchByContext = new SearchByContext();
+                Task searchByContextTask = Task.Run(() => System.Windows.Forms.Application.Run(searchByContext));
+            }
         }
 
         public List<IDataObject> MakeRecognitionList(List<IDataObject> dataObjects)
@@ -367,9 +369,7 @@ namespace PilotOCR
             connection.Close();
             return recognitionDict.Values.ToList();
         }
-
-     
-
+ 
         public List<PiPage> RecognizeWholeDoc(IDataObject dataObject)
         {
             var ctsRecognition = new CancellationTokenSource();
@@ -488,7 +488,6 @@ namespace PilotOCR
             return pieceOfDoc;
         }
 
-
         private PiPage XlsToPage(string storagePath)
         {
             string fileName = Path.GetFileName(storagePath);
@@ -540,7 +539,6 @@ namespace PilotOCR
             return piPage;
         }
 
-
         private PiPage DocToPage(string storagePath)
         {
             string fileName = Path.GetFileName(storagePath);
@@ -562,7 +560,6 @@ namespace PilotOCR
             };
             return piPage;
         }
-
 
         private PiPage TxtToPage(string storagePath)
         {
