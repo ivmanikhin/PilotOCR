@@ -1,6 +1,7 @@
 ﻿using Ascon.Pilot.SDK;
 using Ascon.Pilot.SDK.CreateObjectSample;
 using Ascon.Pilot.SDK.Menu;
+using Ascon.Pilot.SDK.Toolbar;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Bibliography;
 using DocumentFormat.OpenXml.Office.Word;
@@ -172,13 +173,33 @@ namespace PilotOCR
     }
 
 
+
+    [Export(typeof(IToolbar<ObjectsViewContext>))]
+
+    public class SearchButton : IToolbar<ObjectsViewContext>
+    {
+        public void Build(IToolbarBuilder builder, ObjectsViewContext context)
+        {
+            builder.AddButtonItem("SearchByContent", 0)
+                   .WithHeader("Поиск по тексту");
+        }
+
+        public void OnToolbarItemClick(string name, ObjectsViewContext context)
+        {
+            if (name == "SearchByContent")
+            {
+                SearchByContext searchByContext = new SearchByContext();
+                Task searchByContextTask = Task.Run(() => System.Windows.Forms.Application.Run(searchByContext));
+            }//...
+        }
+    }
+
+
     [Export(typeof(IMenu<ObjectsViewContext>))]
-
-
     public class ModifyObjectsPlugin : IMenu<ObjectsViewContext>
     {
-        private const string CONNECTION_PARAMETERS = "datasource=localhost;port=3306;username=root;password=C@L0P$Ck;charset=utf8";
-        private readonly List<string> ACCEPTABLE_DOC_TYPES = new List<string>{ "ECM_letter_inbound", "ECM_incoming_service_note", "ECM_letter", "ECM_outcoming_service_note"};
+        private readonly string connectionParameters = File.ReadAllText($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\connection_settings.txt");
+        private readonly List<string> acceptableDocTypes = File.ReadAllLines($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\acceptable_doc_types.txt").ToList();
         //        private const string PATH = "D:\\TEMP\\Recognized\\";
         private TaskFactory _taskFactoryRecognition;
         private readonly IXpsRender _xpsRender;
@@ -202,6 +223,12 @@ namespace PilotOCR
             this._fileProvider = fileProvider;
             this._objectsRepository = objectsRepository;
             this._loader = new ObjectLoader(_objectsRepository);
+            //connectionParameters = File.ReadAllText($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\acceptable_doc_types.txt");
+            //Debug.Write( connectionParameters );
+            //acceptableDocTypes = File.ReadAllLines($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\connection_settings.txt").ToList();
+            //foreach (string line in acceptableDocTypes)
+            //    Debug.Write(line);
+
         }
 
         public void Build(IMenuBuilder builder, ObjectsViewContext context)
@@ -212,32 +239,8 @@ namespace PilotOCR
             if (this._dataObjects.Count<Ascon.Pilot.SDK.IDataObject>() < 1)
                 return;
             builder.AddItem("RecognizeItemName", 0).WithHeader("Распознать").WithIsEnabled(!isBusy);
-            builder.AddItem("SearchByContent", 0).WithHeader("Поиск по тексту"); //временное решение
+            //builder.AddItem("SearchByContent", 0).WithHeader("Поиск по тексту"); //временное решение
         }
-
-        private bool IsXpsFile(string fileName) => Path.GetExtension(fileName) == ".xps";
-
-        private bool IsDocFile(string fileName) => ((IEnumerable<string>)new string[2]
-        {
-      ".doc",
-      ".docx"
-        }).Contains<string>(Path.GetExtension(fileName));
-
-        private bool IsXlsFile(string fileName) => ((IEnumerable<string>)new string[2]
-        {
-      ".xls",
-      ".xlsx"
-        }).Contains<string>(Path.GetExtension(fileName));
-
-        private bool IsTxtFile(string fileName) => Path.GetExtension(fileName) == ".txt";
-
-        private bool IsPdfFile(string fileName) => Path.GetExtension(fileName) == ".pdf";
-
-        public void KillThemAll()
-        {
-            cancelled = true;
-        }
-
         public void OnMenuItemClick(string name, ObjectsViewContext context)
         {
             if (name == "RecognizeItemName")
@@ -257,7 +260,7 @@ namespace PilotOCR
                     {
                         if (cancelled)
                             break;
-                        else if (!ACCEPTABLE_DOC_TYPES.Contains(dataObject.Type.Name))
+                        else if (!acceptableDocTypes.Contains(dataObject.Type.Name))
                             continue;
                         else
                         {
@@ -269,7 +272,7 @@ namespace PilotOCR
                     foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                     {
                         if (cancelled) break;
-                        else if (ACCEPTABLE_DOC_TYPES.GetRange(0,2).Contains(dataObject.Type.Name))
+                        else if (acceptableDocTypes.GetRange(0,2).Contains(dataObject.Type.Name))
                         {
                             PiLetterInbound piLetter = new PiLetterInbound();
                             piLetter.DataObject = await _loader.Load(dataObject.Id);
@@ -307,12 +310,31 @@ namespace PilotOCR
                     if (!cancelled) progressDialog.CloseRemotely();
                 });
             }
-            if (name == "SearchByContent")
-            {
-                SearchByContext searchByContext = new SearchByContext();
-                Task searchByContextTask = Task.Run(() => System.Windows.Forms.Application.Run(searchByContext));
-            }
         }
+
+        private bool IsXpsFile(string fileName) => Path.GetExtension(fileName) == ".xps";
+
+        private bool IsDocFile(string fileName) => ((IEnumerable<string>)new string[2]
+        {
+      ".doc",
+      ".docx"
+        }).Contains<string>(Path.GetExtension(fileName));
+
+        private bool IsXlsFile(string fileName) => ((IEnumerable<string>)new string[2]
+        {
+      ".xls",
+      ".xlsx"
+        }).Contains<string>(Path.GetExtension(fileName));
+
+        private bool IsTxtFile(string fileName) => Path.GetExtension(fileName) == ".txt";
+
+        private bool IsPdfFile(string fileName) => Path.GetExtension(fileName) == ".pdf";
+
+        public void KillThemAll()
+        {
+            cancelled = true;
+        }
+
 
         public List<IDataObject> MakeRecognitionList(List<IDataObject> dataObjects)
         {
@@ -324,13 +346,14 @@ namespace PilotOCR
             string letterDate = "";
             string docNumType = "";
             string docDateType = "";
-            MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
+            Debug.Write(connectionParameters);
+            MySqlConnection connection = new MySqlConnection(connectionParameters);
             var recognitionDict = new Dictionary<string, IDataObject>();
             foreach (Ascon.Pilot.SDK.IDataObject dataObject in dataObjects)
             {
                 if (dataObject.Attributes.Count < 1 || !dataObject.Type.IsMountable)
                     continue;
-                if (ACCEPTABLE_DOC_TYPES.GetRange(0, 2).Contains(dataObject.Type.Name))
+                if (acceptableDocTypes.GetRange(0, 2).Contains(dataObject.Type.Name))
                 {
                     docDateType = "ECM_inbound_letter_sending_date";
                     docNumType = "ECM_inbound_letter_counter";
@@ -666,7 +689,7 @@ namespace PilotOCR
                 docCorrespondent = MySqlHelper.EscapeString(docCorrespondent);
             if (corruptedFiles != null)
                 corruptedFiles = MySqlHelper.EscapeString(corruptedFiles);
-            MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
+            MySqlConnection connection = new MySqlConnection(connectionParameters);
             connection.Open();
             string commandText = $"INSERT INTO pilotsql.{tableName}(letter_counter, out_no, doc_id, date, subject, correspondent, text, unrecognized) VALUES (@letterCounter, @outNo, @docId, @docDate, @docSubject, @docCorrespondent, @docText, @corruptedFiles)";
             MySqlCommand command = new MySqlCommand(commandText, connection);

@@ -1,19 +1,14 @@
-﻿using System;
+﻿using MySql.Data.MySqlClient;
+using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
-using MySql.Data.MySqlClient;
 
 namespace PilotOCR
 {
     public partial class SearchByContext : Form
     {
-        private const string CONNECTION_PARAMETERS = "datasource=localhost;port=3306;username=root;password=C@L0P$Ck;charset=utf8";
+        private readonly string connectionParameters = System.IO.File.ReadAllText($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\connection_settings.txt");
         public SearchByContext()
         {
             InitializeComponent();
@@ -23,19 +18,23 @@ namespace PilotOCR
         {
             if (SearchTextBox.Text == null)
                 return;
-            bool searchInInbox = true;
-            bool searchInSent = true;
-            string searchMethod = "OR";
+            bool searchInInbox = this.СheckBoxInbox.Checked;
+            bool searchInSent = this.CheckBoxSent.Checked;
+            string searchMethod;
             List<string> results = new List<string>();
             string searchConditions = "";
-            MySqlConnection connection = new MySqlConnection(CONNECTION_PARAMETERS);
+            MySqlConnection connection = new MySqlConnection(connectionParameters);
             List<string> searchList = SearchTextBox.Text.Split("\r\n".ToCharArray()).ToList();
+            if (RadioButtonOr.Checked)
+                searchMethod = "OR";
+            else
+                searchMethod = "AND";
             foreach (string s in searchList)
             {
                 if (s.Length > 0)
                     searchConditions += $"(text like '%{MySqlHelper.EscapeString(s)}%') {searchMethod} ";
             }
-            string commandText = $"select letter_counter, out_no, date, subject from pilotsql.inbox where {searchConditions.Remove(searchConditions.Length - 3)}";
+            string commandText = $"select letter_counter, out_no, date, subject from pilotsql.inbox where {searchConditions.Remove(searchConditions.Length - 4)}";
             connection.Open();
             if (searchInInbox)
             {
@@ -53,7 +52,7 @@ namespace PilotOCR
             }
             if (searchInSent)
             {
-                using (var command = new MySqlCommand($"select letter_counter, out_no, date, subject from pilotsql.sent where {searchConditions.Remove(searchConditions.Length - 3)}", connection))
+                using (var command = new MySqlCommand($"select letter_counter, out_no, date, subject from pilotsql.sent where {searchConditions.Remove(searchConditions.Length - 4)}", connection))
                 {
                     //Debug.WriteLine(command.CommandText);
                     using (var reader = command.ExecuteReader())
@@ -70,5 +69,6 @@ namespace PilotOCR
             foreach (string s in results)
                 ResultTextBox.Text += (s + "\r\n\r\n");
         }
+
     }
 }
