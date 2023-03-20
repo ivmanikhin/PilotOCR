@@ -1,7 +1,9 @@
 ﻿using MySql.Data.MySqlClient;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Windows.Forms;
 
 namespace PilotOCR
@@ -12,6 +14,35 @@ namespace PilotOCR
         public SearchByContext()
         {
             InitializeComponent();
+        }
+
+        private string ConvertToRegex(string input)
+        {
+            var replacements = new Dictionary<char, string> { { 'б', "[бБ6]" },
+                                                              { 'Б', "[бБ6]" },
+                                                              { '6', "[бБ6]" },
+                                                              { 'В', "[В8]" },
+                                                              { '8', "[В8]" },
+                                                              { 'З', "[З3]" },
+                                                              { '3', "[З3]" },
+                                                              { 'и', "[инп]" },
+                                                              { 'н', "[инп]" },
+                                                              { 'п', "[инпл]" },
+                                                              { 'л', "[лп]" },
+                                                              { 'О', "[О0@]" },
+                                                              { '0', "[О0@]" },
+                                                              { '@', "[О0@]" } };
+            string result = "";
+            foreach (char c in input)
+            {
+                if (replacements.Keys.ToList().Contains(c))
+                    result += replacements[c];
+                else result += c;
+            }
+
+
+            Debug.WriteLine(result);
+            return result;
         }
 
         private void SearchButton_Click(object sender, EventArgs e)
@@ -32,7 +63,8 @@ namespace PilotOCR
             foreach (string s in searchList)
             {
                 if (s.Length > 0)
-                    searchConditions += $"(text like '%{MySqlHelper.EscapeString(s)}%') {searchMethod} ";
+                    //searchConditions += $"(text like '%{MySqlHelper.EscapeString(s)}%') {searchMethod} ";
+                    searchConditions += $"(text regexp '{ConvertToRegex(s)}') {searchMethod} ";
             }
             string commandText = $"select letter_counter, out_no, date, subject from pilotsql.inbox where {searchConditions.Remove(searchConditions.Length - 4)}";
             connection.Open();
