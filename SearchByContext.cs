@@ -9,29 +9,38 @@ using System.Windows.Forms;
 namespace PilotOCR
 {
     public partial class SearchByContext : Form
+        //GUI для поиска по тексту писем и вложений
     {
+        //словарь замен для метода ConvertToRegex:
+        private readonly Dictionary<char, string> REPLACEMENTS = new Dictionary<char, string> { { 'б', "[бБ6]" },
+                                                                                                { 'Б', "[бБ6]" },
+                                                                                                { '6', "[бБ6]" },
+                                                                                                { 'В', "[В8]" },
+                                                                                                { '8', "[В8]" },
+                                                                                                { 'З', "[З3]" },
+                                                                                                { '3', "[З3]" },
+                                                                                                { 'и', "[инп]" },
+                                                                                                { 'н', "[инп]" },
+                                                                                                { 'п', "[инпл]" },
+                                                                                                { 'л', "[лп]" },
+                                                                                                { 'О', "[О0@]" },
+                                                                                                { '0', "[О0@]" },
+                                                                                                { '@', "[О0@]" } };
+
+        //чтение настроек подключения к базе данных:
         private readonly string connectionParameters = System.IO.File.ReadAllText($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\connection_settings.txt");
+        
         public SearchByContext()
         {
             InitializeComponent();
         }
 
-        private string ConvertToRegex(string input)
+        private string ConvertToRegex(string input, Dictionary<char, string> replacements)
+            //метод, конвертирующий поисковый запрос в regex выражение для компенсации погрешностей распознавания
         {
-            var replacements = new Dictionary<char, string> { { 'б', "[бБ6]" },
-                                                              { 'Б', "[бБ6]" },
-                                                              { '6', "[бБ6]" },
-                                                              { 'В', "[В8]" },
-                                                              { '8', "[В8]" },
-                                                              { 'З', "[З3]" },
-                                                              { '3', "[З3]" },
-                                                              { 'и', "[инп]" },
-                                                              { 'н', "[инп]" },
-                                                              { 'п', "[инпл]" },
-                                                              { 'л', "[лп]" },
-                                                              { 'О', "[О0@]" },
-                                                              { '0', "[О0@]" },
-                                                              { '@', "[О0@]" } };
+            input = MySqlHelper.EscapeString(input);
+            if (replacements == null) return input;
+            if (input == null) return "";
             string result = "";
             foreach (char c in input)
             {
@@ -39,9 +48,6 @@ namespace PilotOCR
                     result += replacements[c];
                 else result += c;
             }
-
-
-            Debug.WriteLine(result);
             return result;
         }
 
@@ -55,24 +61,27 @@ namespace PilotOCR
             List<string> results = new List<string>();
             string searchConditions = "";
             MySqlConnection connection = new MySqlConnection(connectionParameters);
+            //составленеие списка искомых фраз:
             List<string> searchList = SearchTextBox.Text.Split("\r\n".ToCharArray()).ToList();
+            //определение типа поиска – "И" / "ИЛИ":
             if (RadioButtonOr.Checked)
                 searchMethod = "OR";
             else
                 searchMethod = "AND";
+            //составление списка условий для SQL запроса: 
             foreach (string s in searchList)
             {
                 if (s.Length > 0)
-                    //searchConditions += $"(text like '%{MySqlHelper.EscapeString(s)}%') {searchMethod} ";
-                    searchConditions += $"(text regexp '{ConvertToRegex(s)}') {searchMethod} ";
+                    searchConditions += $"(text regexp '{ConvertToRegex(s, REPLACEMENTS)}') {searchMethod} ";
             }
+            //составление SQL запроса:
             string commandText = $"select letter_counter, out_no, date, subject from pilotsql.inbox where {searchConditions.Remove(searchConditions.Length - 4)}";
             connection.Open();
+            //поиск во входящих:
             if (searchInInbox)
             {
                 using (var command = new MySqlCommand(commandText, connection))
                 {
-                    //Debug.WriteLine(command.CommandText);
                     using (var reader = command.ExecuteReader())
                     {
                         while (reader.Read())
@@ -82,11 +91,11 @@ namespace PilotOCR
                     }
                 };
             }
+            //поиск в исходящих:
             if (searchInSent)
             {
                 using (var command = new MySqlCommand($"select letter_counter, out_no, date, subject from pilotsql.sent where {searchConditions.Remove(searchConditions.Length - 4)}", connection))
                 {
-                    //Debug.WriteLine(command.CommandText);
                     using (var reader = command.ExecuteReader())
                     {
                         while (reader.Read())
@@ -98,8 +107,17 @@ namespace PilotOCR
             }
             connection.Close();
             ResultTextBox.Text = "";
+            //отображение результатов поиска:
             foreach (string s in results)
                 ResultTextBox.Text += (s + "\r\n\r\n");
+
+            //TODO 1:
+            //Показывать, в каком именно вложении искомая фраза.
+            
+            //TODO 2:
+            //Вариант 1 (простой): сделать результаты поиска ссылками;
+            //Вариант 2 (сложный): сделать результаты поиска кнопками, открывающими письмо в новой вкладке и конктретное вложение, содержащее искомую фразу.
+
         }
 
     }

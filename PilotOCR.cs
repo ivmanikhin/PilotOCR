@@ -27,14 +27,25 @@ using TesseractOCR;
 
 namespace PilotOCR
 {
+    //Дополнение для распознавания сканированных документов (писем) и вложений
+    //(в т.ч. чтение вложений txt, xls, doc) и составление БД для возможности поиска по тексту писем
+
+    //страница документа:
     public class PiPage
     {
-        //public Guid DocID { get; set; }
-        //public string DocName { get; set; }
+        //имя файла:
         public string FileName { get; set; }
+
+        //номер листа:
         public int PageNum { get; set; }
+        
+        //текст (распознанный или прочитанный из doc, txt или xls):
         public string Text { get; set; }
+
+        //скан или рендер документа:
         public Image Image { get; set; }
+
+        //ссылка на файл, если он не прочитался:
         public string CorruptedFilePath { get; set; }
 
         public PiPage() { }
@@ -50,19 +61,43 @@ namespace PilotOCR
         }
     }
 
+    //письмо:
     public class PiLetter
     {
+        //сам объект, из которого будет читаться письмо и вложения:
         public IDataObject DataObject { get; set; }
+
+        //номер письма (ECM_inbound_letter_counter или ECM_letter_counter):
         public string LetterCounter { get; set; }
+        
+        //ID письма:
         public string DocId { get; set; }
+
+        //исходящий номер:
         public string OutNo { get; set; }
+
+        //дата документа:
         public string DocDate { get; set; }
+        
+        //тема письма:
         public string DocSubject { get; set; }
+        
+        //адресат для исходящего или отправитель для входящего
         public string DocCorrespondent { get; set; }
+
+        //страницы письма и вложений:
         public List<PiPage> Pages { get; set; }
+
+        //текст письма и вложений:
         public string Text { get; set; }
+
+        //перечень не прочитавшихся файлов:
         public string CorruptedFiles { get; set; }
+
+        //количество листов письма и вложений:
         public int PagesQtt { get; set; }
+        
+        //запись текста письма и вложений, присвоение количества листов:
         public void SetText()
         {
             foreach (PiPage piPage in Pages)
@@ -72,6 +107,7 @@ namespace PilotOCR
             PagesQtt = Pages.Count;
         }
 
+        //составление перечня не прочитавшихся файлов:
         public void SetCorruptedFiles()
         {
             foreach (PiPage piPage in Pages)
@@ -86,6 +122,8 @@ namespace PilotOCR
     }
 
 
+
+    //входящее письмо:
     public class PiLetterInbound : PiLetter
     {
         public PiLetterInbound() { }
@@ -101,6 +139,8 @@ namespace PilotOCR
         //    this.text = "";
         //}
 
+
+        //запись атрибутов из DataObject'а в PiLetterInbound:
         public void ReadAttributes()
         {
             foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>) DataObject.Attributes)
@@ -134,10 +174,13 @@ namespace PilotOCR
 
     }
 
+
+    //исходящее письмо:
     public class PiLetterSent : PiLetter
     {
         public PiLetterSent() { }
 
+        //запись атрибутов из DataObject'а в PiLetterSent:
         public void ReadAttributes()
         {
             foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)DataObject.Attributes)
@@ -180,6 +223,7 @@ namespace PilotOCR
     {
         public void Build(IToolbarBuilder builder, ObjectsViewContext context)
         {
+            //кнопка поиска по тексту писем и вложений:
             builder.AddButtonItem("SearchByContent", 0)
                    .WithHeader("Поиск по тексту");
         }
@@ -188,9 +232,10 @@ namespace PilotOCR
         {
             if (name == "SearchByContent")
             {
+                //запуск GUI поиска по тексту писем и вложений:
                 SearchByContext searchByContext = new SearchByContext();
                 Task searchByContextTask = Task.Run(() => System.Windows.Forms.Application.Run(searchByContext));
-            }//...
+            }
         }
     }
 
@@ -198,9 +243,11 @@ namespace PilotOCR
     [Export(typeof(IMenu<ObjectsViewContext>))]
     public class ModifyObjectsPlugin : IMenu<ObjectsViewContext>
     {
+        //чтение настроек соединения с SQL базой:
         private readonly string connectionParameters = File.ReadAllText($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\connection_settings.txt");
+        //определение типов документов, подлежащих распознаванию:
         private readonly List<string> acceptableDocTypes = File.ReadAllLines($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\acceptable_doc_types.txt").ToList();
-        //        private const string PATH = "D:\\TEMP\\Recognized\\";
+
         private TaskFactory _taskFactoryRecognition;
         private readonly IXpsRender _xpsRender;
         private readonly IFileProvider _fileProvider;
@@ -208,10 +255,15 @@ namespace PilotOCR
         private readonly IObjectsRepository _objectsRepository;
         private readonly ObjectLoader _loader;
         private List<IDataObject> _dataObjects = new List<IDataObject>();
+        //task scheduler для задач распознавания с ограничением параллельных задач - не более 8 шт.:
         private readonly LimitedConcurrencyLevelTaskScheduler lctsRecognition = new LimitedConcurrencyLevelTaskScheduler(8);
+        //количество распознаваемых документов:
         private int docsCount = 0; 
+        //суммарное кол-во листов распознаваемых документов и вложений:
         private int pagesCount = 0;
+        //переменная для остановки процесса распознавания:
         private bool cancelled = false;
+        //переменная для предотвращения запуска пользователем нового задания на распознавание:
         private bool isBusy = false;
 
 
@@ -233,61 +285,82 @@ namespace PilotOCR
 
         public void Build(IMenuBuilder builder, ObjectsViewContext context)
         {
+            //пункт меню для распознавания:
             if (context.IsContext)
                 return;
             this._dataObjects = context.SelectedObjects.ToList<Ascon.Pilot.SDK.IDataObject>();
             if (this._dataObjects.Count<Ascon.Pilot.SDK.IDataObject>() < 1)
                 return;
             builder.AddItem("RecognizeItemName", 0).WithHeader("Распознать").WithIsEnabled(!isBusy);
-            //builder.AddItem("SearchByContent", 0).WithHeader("Поиск по тексту"); //временное решение
         }
         public void OnMenuItemClick(string name, ObjectsViewContext context)
         {
             if (name == "RecognizeItemName")
             {
                 docsCount = 0;
+                //окно отображения хода распознавания:
                 ProgressDialog progressDialog = new ProgressDialog(this);
                 cancelled = false;
                 _taskFactoryRecognition = new TaskFactory(lctsRecognition);
                 pagesCount = 0;
+                //определение списка документов, подлежащих распознаванию:
                 _dataObjects = MakeRecognitionList(_dataObjects);
+                //назначение общего количества распознаваемых документов для отображения в окне хода распознавания:
                 progressDialog.SetMax(_dataObjects.Count);
                 Task progressDialogTask = Task.Run(() => System.Windows.Forms.Application.Run(progressDialog));
+                //непосредственно запуск распознавания:
                 Task.Run(async () =>
                 {
                     isBusy = true;
                     foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                     {
+                        //проверка, не отменена ли работа (будет на всех этапах)
                         if (cancelled)
                             break;
+                        //проверка, подлежит ли распознаванию документ
+                            //TODO 1:
+                            //перенести это в MakeRecognitionList
                         else if (!acceptableDocTypes.Contains(dataObject.Type.Name))
                             continue;
+                        //запрос на выгрузку вложений (исходных файлов) в хранилище:
                         else
                         {
                             _objectsRepository.Mount(dataObject.Id);
                         }
                     };
+                    //ожидание (3 секунды), чтобы дать загрузиться в хранилище хотя бы первому документу из списка.
+                    //остальные документы успеют загрузиться по ходу поочерёдного распознавания. 
                     await Task.Delay(3000);
  
                     foreach (Ascon.Pilot.SDK.IDataObject dataObject in _dataObjects)
                     {
                         if (cancelled) break;
+                        //если документ является входящим письмом или служебкой:
                         else if (acceptableDocTypes.GetRange(0,2).Contains(dataObject.Type.Name))
                         {
                             PiLetterInbound piLetter = new PiLetterInbound();
+                            //загрузка актуального DataObject'а:
                             piLetter.DataObject = await _loader.Load(dataObject.Id);
+                            //заполнение атрибутов документа:
                             piLetter.DocId = dataObject.Id.ToString();
                             piLetter.ReadAttributes();
+                            //отображение номера и темы распознаваемого в данный момент письма: 
                             progressDialog.SetCurrentDocName(piLetter.LetterCounter + " - " + piLetter.OutNo + " - " + piLetter.DocDate + " - " + piLetter.DocSubject);
+                            //распознавание документа и вложений:
                             piLetter.Pages = RecognizeWholeDoc(piLetter.DataObject);
                             if (cancelled) break;
+                            //запись текста распознанных страниц в один большой текстовый атрибут, по которому в дальнейшем можно будет проводить поиск:
                             piLetter.SetText();
+                            //перечень непрочитанных файлов:
                             piLetter.SetCorruptedFiles();
+                            //обновление счётчика листов:
                             pagesCount += piLetter.PagesQtt;
+                            //запись распознанного письма в SQL БД:
                             DocToDB("inbox", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text, piLetter.CorruptedFiles);
                         }
                         else
                         {
+                            //всё то же самое для исходящих:
                             PiLetterSent piLetter = new PiLetterSent();
                             piLetter.DataObject = await _loader.Load(dataObject.Id);
                             piLetter.DocId = dataObject.Id.ToString();
@@ -300,18 +373,22 @@ namespace PilotOCR
                             pagesCount += piLetter.PagesQtt;
                             DocToDB("sent", piLetter.LetterCounter, piLetter.OutNo, piLetter.DocId, piLetter.DocDate, piLetter.DocSubject, piLetter.DocCorrespondent, piLetter.Text, piLetter.CorruptedFiles);
                         }
+                        //клац по прогрессбару:
                         progressDialog.UpdateProgress();
+                        //клац по счётчику распознанных документов:
                         docsCount++;
                     };
-                    //connection.Close();
+                    //по окончанию работы окно с результатами:
                     System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц распознано\n в " + _dataObjects.Count.ToString() + " документах");
                     pagesCount = 0;
                     isBusy = false;
+                    //закрывание окна прогрессбара:
                     if (!cancelled) progressDialog.CloseRemotely();
                 });
             }
         }
 
+        //определение типа файла:
         private bool IsXpsFile(string fileName) => Path.GetExtension(fileName) == ".xps";
 
         private bool IsDocFile(string fileName) => ((IEnumerable<string>)new string[2]
@@ -330,29 +407,30 @@ namespace PilotOCR
 
         private bool IsPdfFile(string fileName) => Path.GetExtension(fileName) == ".pdf";
 
+
+        //отмена:
         public void KillThemAll()
         {
             cancelled = true;
         }
 
-
+        //составление списка документов, подлежащих распознаванию (по типу, mountable, по наличию в SQL БД):
         public List<IDataObject> MakeRecognitionList(List<IDataObject> dataObjects)
         {
-            //string letterNumbers = "";
-            //string letterDates = "";
+            //переменные для названия SQL таблицы и названий атрибутов DataObject'а
             string tableName = "";
             string searchConditions = "";
             string letterCounter = "";
             string letterDate = "";
             string docNumType = "";
             string docDateType = "";
-            Debug.Write(connectionParameters);
             MySqlConnection connection = new MySqlConnection(connectionParameters);
             var recognitionDict = new Dictionary<string, IDataObject>();
             foreach (Ascon.Pilot.SDK.IDataObject dataObject in dataObjects)
             {
                 if (dataObject.Attributes.Count < 1 || !dataObject.Type.IsMountable)
                     continue;
+                //определение таблицы, в которой может быть искомый документ и присвоение наиаенований атрибутов
                 if (acceptableDocTypes.GetRange(0, 2).Contains(dataObject.Type.Name))
                 {
                     docDateType = "ECM_inbound_letter_sending_date";
@@ -366,6 +444,7 @@ namespace PilotOCR
                     tableName = "sent";
                 }
 
+                //присвоение атрибутов "номер" и "дата"
                 foreach (KeyValuePair<string, object> attribute in (IEnumerable<KeyValuePair<string, object>>)dataObject.Attributes)
                 {
                     if (attribute.Value != null)
@@ -374,17 +453,19 @@ namespace PilotOCR
                         else if (attribute.Key == docDateType)
                             letterDate = attribute.Value.ToString();
                 };
+
+                //добавление в поисковый запрос (SELECT) искомых писем по номеру и дате
                 searchConditions += $"(letter_counter = '{letterCounter}' and date = '{letterDate}') or ";
                 recognitionDict.Add(letterCounter + letterDate, dataObject);
             }
             connection.Open();
             using (var command = new MySqlCommand($"select letter_counter, date from pilotsql.{tableName} where {searchConditions.Remove(searchConditions.Length - 4)}", connection))
             {
-                //Debug.WriteLine(command.CommandText);
                 using (var reader = command.ExecuteReader())
                 {
                     while (reader.Read())
                     {
+                        //исключение из выделенных пользователем DataObject'ов писем, имеющихся в SQL БД
                         recognitionDict.Remove(reader.GetString(0)+reader.GetString(1));
                     }
                 }
@@ -393,12 +474,15 @@ namespace PilotOCR
             return recognitionDict.Values.ToList();
         }
  
+
+        //распознавание письма и всех вложений:
         public List<PiPage> RecognizeWholeDoc(IDataObject dataObject)
         {
             var ctsRecognition = new CancellationTokenSource();
             var token = ctsRecognition.Token;
             var recognitionTasks = new ConcurrentBag<Task>();
             List<PiPage> pieceOfDoc = new List<PiPage>();
+            //рендер всех страниц документа в Image:
             foreach (IFile file in dataObject.ActualFileSnapshot.Files)
             {
                 if (cancelled) break;
@@ -445,6 +529,7 @@ namespace PilotOCR
                     }
                 }
             };
+            //рендер всех вложений:
             foreach (Guid child in dataObject.Children)
             {
                 if (cancelled) break;
@@ -485,6 +570,8 @@ namespace PilotOCR
                     pieceOfDoc.Add(XlsToPage(storagePath));
                 }
             };
+
+            //параллельное распознавание отрендеренных страниц:
             foreach (PiPage piPage in pieceOfDoc)
             {
                 if (cancelled)
@@ -503,14 +590,14 @@ namespace PilotOCR
                     }, token);
                     recognitionTasks.Add(recognitionTask);
                 }
-                //piPage.DocID = dataObject.Id;
-                //piPage.DocName = dataObject.Attributes.FirstOrDefault<KeyValuePair<string, object>>().Value.ToString();
             };
             Task.WaitAll(recognitionTasks.ToArray());
             ctsRecognition.Dispose();
             return pieceOfDoc;
         }
 
+
+        //извлечение текста из XLS 
         private PiPage XlsToPage(string storagePath)
         {
             string fileName = Path.GetFileName(storagePath);
@@ -562,6 +649,8 @@ namespace PilotOCR
             return piPage;
         }
 
+
+        //извлечение текста из DOC
         private PiPage DocToPage(string storagePath)
         {
             string fileName = Path.GetFileName(storagePath);
@@ -584,6 +673,7 @@ namespace PilotOCR
             return piPage;
         }
 
+        //извлечение текста из TXT
         private PiPage TxtToPage(string storagePath)
         {
             string fileName = Path.GetFileName(storagePath);
@@ -603,6 +693,7 @@ namespace PilotOCR
             return piPage;
         }
 
+        //преобразование PDF документа в объект PiPage c рендерами:
         private List<PiPage> PdfToPages(Stream pdfStream, string fileName)
         {
             List<PiPage> pages = new List<PiPage>();
@@ -616,18 +707,18 @@ namespace PilotOCR
                         FileName = fileName
                     };
                     PdfDocument pdfDocument2 = pdfDocument1;
-                    int page1 = index;
                     SizeF pageSiz = pdfDocument1.PageSizes[index];
                     int width = pageSiz.ToSize().Width * 2;
                     pageSiz = pdfDocument1.PageSizes[index];
                     int height = pageSiz.ToSize().Height * 2;
-                    page.Image = pdfDocument2.Render(page1, width, height, 96f, 96f, false);
+                    page.Image = pdfDocument2.Render(index, width, height, 96f, 96f, false);
                     pages.Add(page);
                 };
                 return pages;
             };
         }
 
+        //преобразование XPS в объект PiPage с рендерами:
         public List<PiPage> XpsToPages(Stream xpsStream, string fileName)
         {
             List<PiPage> pages = new List<PiPage>();
@@ -645,6 +736,7 @@ namespace PilotOCR
             return pages;
         }
 
+        //определение адреса, где хранятся файлы сборки:
         public string GetResourcesPath()
         {
             string location = Assembly.GetExecutingAssembly().Location;
@@ -652,6 +744,7 @@ namespace PilotOCR
             return location.Substring(0, length);
         }
 
+        //распознавание Image страницы и запись распознанного текста в PiPage.Text:
         public string PageToText(Image pageImg)
         {
             string text = (string)null;
@@ -660,12 +753,10 @@ namespace PilotOCR
                 using (Engine engine = new Engine(this.GetResourcesPath() + "\\tessdata\\", "rus(best)"))
                 {
                     Image image = (Image)this.TiltDocument((Bitmap)pageImg);
-                    //Random random = new Random();
                     using (MemoryStream memoryStream = new MemoryStream())
                     {
                         image.Save((Stream)memoryStream, ImageFormat.Png);
                         using (TesseractOCR.Page page = engine.Process(TesseractOCR.Pix.Image.LoadFromMemory(memoryStream)))
-                            //text = Regex.Replace(Regex.Replace(page.Text, " +", " "), "(?<!\\d)-+[ +]?\\n+[ +]?|(?<=[\\d\\wа-яА-я])\\s+(?=\\.)|(?<=\\.)\\s+(?=\\d)", "");
                             text = page.Text;
                     };
                 };
@@ -673,6 +764,7 @@ namespace PilotOCR
             return text;
         }
 
+        //запись распознанного документа в SQL БД:
         private void DocToDB(string tableName, string letterCounter, string outNo, string docId, string docDate, string docSubject, string docCorrespondent, string docText, string corruptedFiles)
         {
             if (docText != null)
@@ -701,52 +793,53 @@ namespace PilotOCR
             command.Parameters.AddWithValue("@docCorrespondent", docCorrespondent);
             command.Parameters.AddWithValue("@docText", docText);
             command.Parameters.AddWithValue("@corruptedFiles", corruptedFiles);
-            //System.Windows.Forms.MessageBox.Show(commandText);
             try
             {
-
                 command.ExecuteNonQuery();
             }
             catch (MySqlException ex){ System.Windows.Forms.MessageBox.Show(ex.Message); };
-            //    MessageBox.Show("Data Inserted");
-            //else
-            //    MessageBox.Show("Failed");
             connection.Close();
-            
         }
 
+
+        //выравнивание криво отсканированного документа (поворот документа на -10...10 градусов):
         private Bitmap TiltDocument(Bitmap inputPic)
         {
+            //создание Bitmapa с размерами меньше исходного листа - для обрезки полей и шапки письма:
             Bitmap bitmap1 = new Bitmap(inputPic.Width * 2 / 3, inputPic.Height / 2);
+            //создание Bitmapа для идеально горизонтального документа:
             Bitmap bitmap2 = new Bitmap(inputPic.Width, inputPic.Height);
+            //высота уменьшенного битмапа, подлежащего анализу для определения угла поворота:
             int height = 640;
+            //bitmap для хранения уменьшенного (ужатого) рендера/скана документа:
             Bitmap inputBmp = new Bitmap(height * 2 / 3, height);
             Rectangle rect = new Rectangle((inputPic.Width - bitmap1.Width) / 2, (inputPic.Height - bitmap1.Height) / 2, (inputPic.Width + bitmap1.Width) / 2, (inputPic.Height + bitmap1.Height) / 2);
             Bitmap bitmap3 = inputPic.Clone(rect, inputPic.PixelFormat);
-            //Task graphicsTask = _taskFactoryGrapgic.StartNew(() =>
-            //{
-                using (Graphics graphics = Graphics.FromImage((Image)inputBmp))
-                    graphics.DrawImage((Image)bitmap3, 0, 0, inputBmp.Width, inputBmp.Height);
-                float angle = this.GetOptimumAngle(inputBmp, 10f, 1f) + this.GetOptimumAngle(inputBmp, 1.25f, 0.25f);
-                using (Graphics graphics = Graphics.FromImage((Image)bitmap2))
-                {
-                    graphics.RotateTransform(angle);
-                    graphics.Clear(System.Drawing.Color.White);
-                    graphics.DrawImage((Image)inputPic, (int)((double)inputPic.Height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)((double)inputPic.Width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
-                };
-            //}, ctsGrapgic.Token);
-            //graphicsTask.Wait();
+            using (Graphics graphics = Graphics.FromImage((Image)inputBmp))
+                graphics.DrawImage((Image)bitmap3, 0, 0, inputBmp.Width, inputBmp.Height);
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            //stopwatch.Start();
+            float angle = this.GetOptimumAngle(inputBmp, 0f, 5f, 0.25f);
+            //angle = this.GetOptimumAngle(inputBmp, angle, 10f, 0.25f);
+            //stopwatch.Stop();
+            //Debug.Write(stopwatch.ElapsedMilliseconds.ToString());
+            using (Graphics graphics = Graphics.FromImage((Image)bitmap2))
+            {
+                graphics.RotateTransform(angle);
+                graphics.Clear(System.Drawing.Color.White);
+                graphics.DrawImage((Image)inputPic, (int)((double)inputPic.Height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)((double)inputPic.Width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
+            };
             return bitmap2;
         }
 
-        private float GetOptimumAngle(Bitmap inputBmp, float amplitude, float stepSize)
+        private float GetOptimumAngle(Bitmap inputBmp, float initAngle, float amplitude, float stepSize)
         {
             int width = inputBmp.Width;
             int height = inputBmp.Height;
             Bitmap bitmap1 = new Bitmap(1, height);
             int[] numArray1 = new int[height];
             Dictionary<float, int> source = new Dictionary<float, int>();
-            for (float num1 = -amplitude; (double)num1 < (double)amplitude; num1 += stepSize)
+            for (float num1 = (-amplitude + initAngle); num1 < (amplitude + initAngle); num1 += stepSize)
             {
                 int num2 = 765;
                 Bitmap bitmap2 = new Bitmap(width, height);
