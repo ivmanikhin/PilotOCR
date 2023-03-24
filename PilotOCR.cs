@@ -128,18 +128,6 @@ namespace PilotOCR
     {
         public PiLetterInbound() { }
 
-        //public PiLetterInbox(Guid docId, string inputNo, string outNo, string docDate, string docSubject, string docCorrespondent)
-        //{
-        //    this.docId = docId;
-        //    this.inputNo = inputNo;
-        //    this.outNo = outNo;
-        //    this.docDate = docDate;
-        //    this.docSubject = docSubject;
-        //    this.docCorrespondent = docCorrespondent;
-        //    this.text = "";
-        //}
-
-
         //запись атрибутов из DataObject'а в PiLetterInbound:
         public void ReadAttributes()
         {
@@ -243,6 +231,9 @@ namespace PilotOCR
     [Export(typeof(IMenu<ObjectsViewContext>))]
     public class ModifyObjectsPlugin : IMenu<ObjectsViewContext>
     {
+        #if DEBUG
+        private string logs = "";
+        #endif
         //чтение настроек соединения с SQL базой:
         private readonly string connectionParameters = File.ReadAllText($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\connection_settings.txt");
         //определение типов документов, подлежащих распознаванию:
@@ -275,12 +266,6 @@ namespace PilotOCR
             this._fileProvider = fileProvider;
             this._objectsRepository = objectsRepository;
             this._loader = new ObjectLoader(_objectsRepository);
-            //connectionParameters = File.ReadAllText($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\acceptable_doc_types.txt");
-            //Debug.Write( connectionParameters );
-            //acceptableDocTypes = File.ReadAllLines($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\connection_settings.txt").ToList();
-            //foreach (string line in acceptableDocTypes)
-            //    Debug.Write(line);
-
         }
 
         public void Build(IMenuBuilder builder, ObjectsViewContext context)
@@ -382,6 +367,9 @@ namespace PilotOCR
                     System.Windows.Forms.MessageBox.Show(pagesCount.ToString() + " страниц распознано\n в " + _dataObjects.Count.ToString() + " документах");
                     pagesCount = 0;
                     isBusy = false;
+                    #if DEBUG
+                    File.WriteAllText("D:\\TEMP\\logs.txt", logs);
+                    #endif
                     //закрывание окна прогрессбара:
                     if (!cancelled) progressDialog.CloseRemotely();
                 });
@@ -584,7 +572,7 @@ namespace PilotOCR
                     {
                         if (!token.IsCancellationRequested)
                         {
-                            piPage.Text = PageToText(piPage.Image);
+                            piPage.Text = PageToText(piPage.Image, piPage.FileName);
                             piPage.Image = null;
                         }
                     }, token);
@@ -745,14 +733,14 @@ namespace PilotOCR
         }
 
         //распознавание Image страницы и запись распознанного текста в PiPage.Text:
-        public string PageToText(Image pageImg)
+        public string PageToText(Image pageImg, string filename)
         {
             string text = (string)null;
             if (pageImg != null)
             {
                 using (Engine engine = new Engine(this.GetResourcesPath() + "\\tessdata\\", "rus(best)"))
                 {
-                    Image image = (Image)this.TiltDocument((Bitmap)pageImg);
+                    Image image = (Image)this.TiltDocument((Bitmap)pageImg, filename);
                     using (MemoryStream memoryStream = new MemoryStream())
                     {
                         image.Save((Stream)memoryStream, ImageFormat.Png);
@@ -803,84 +791,189 @@ namespace PilotOCR
 
 
         //выравнивание криво отсканированного документа (поворот документа на -10...10 градусов):
-        private Bitmap TiltDocument(Bitmap inputPic)
+        private Bitmap TiltDocument(Bitmap inputPic, string filename)
         {
             //создание Bitmapa с размерами меньше исходного листа - для обрезки полей и шапки письма:
-            Bitmap bitmap1 = new Bitmap(inputPic.Width * 2 / 3, inputPic.Height / 2);
+            Bitmap croppedPic = new Bitmap(inputPic.Width * 2/3, inputPic.Height / 2);
             //создание Bitmapа для идеально горизонтального документа:
-            Bitmap bitmap2 = new Bitmap(inputPic.Width, inputPic.Height);
-            //высота уменьшенного битмапа, подлежащего анализу для определения угла поворота:
-            int height = 640;
+            Bitmap horisontalPic = new Bitmap(inputPic.Width, inputPic.Height);
+            //высота одностолбцового битмапа, подлежащего анализу для определения угла поворота:
+            int colImageHeight = 480;
+            if (croppedPic.Height < colImageHeight) colImageHeight = croppedPic.Height; 
+            float croppedAspectRatio = (float)croppedPic.Width / (float)croppedPic.Height;
             //bitmap для хранения уменьшенного (ужатого) рендера/скана документа:
-            Bitmap inputBmp = new Bitmap(height * 2 / 3, height);
-            Rectangle rect = new Rectangle((inputPic.Width - bitmap1.Width) / 2, (inputPic.Height - bitmap1.Height) / 2, (inputPic.Width + bitmap1.Width) / 2, (inputPic.Height + bitmap1.Height) / 2);
-            Bitmap bitmap3 = inputPic.Clone(rect, inputPic.PixelFormat);
-            using (Graphics graphics = Graphics.FromImage((Image)inputBmp))
-                graphics.DrawImage((Image)bitmap3, 0, 0, inputBmp.Width, inputBmp.Height);
+            Bitmap shrinkPic = new Bitmap((int)((float)colImageHeight * croppedAspectRatio), colImageHeight);
+            RectangleF rect = new RectangleF((inputPic.Width - croppedPic.Width) / 2,
+                                           (inputPic.Height - croppedPic.Height) / 2,
+                                           croppedPic.Width,
+                                           croppedPic.Height);
+            croppedPic = inputPic.Clone(rect, inputPic.PixelFormat);
+            using (Graphics graphics = Graphics.FromImage((Image)shrinkPic))
+                graphics.DrawImage((Image)croppedPic, 0, 0, shrinkPic.Width, shrinkPic.Height);
+#if DEBUG
             Stopwatch stopwatch = Stopwatch.StartNew();
-            //stopwatch.Start();
-            float angle = this.GetOptimumAngle(inputBmp, 0f, 5f, 0.25f);
-            //angle = this.GetOptimumAngle(inputBmp, angle, 10f, 0.25f);
-            //stopwatch.Stop();
-            //Debug.Write(stopwatch.ElapsedMilliseconds.ToString());
-            using (Graphics graphics = Graphics.FromImage((Image)bitmap2))
+            stopwatch.Start();
+#endif
+            //определение угла поворота документа:
+            float optimumAngle = this.GetOptimumAngle(shrinkPic, 0f, 5f, 1f);
+            optimumAngle = this.GetOptimumAngle(shrinkPic, (float)optimumAngle, 0.6f, 0.2f);
+#if DEBUG
+            stopwatch.Stop();
+            Debug.Write($"{stopwatch.ElapsedMilliseconds}, {optimumAngle}\n");
+#endif
+            //поворот документа:
+            using (Graphics graphics = Graphics.FromImage((Image)horisontalPic))
             {
-                graphics.RotateTransform(angle);
+                graphics.RotateTransform(optimumAngle);
                 graphics.Clear(System.Drawing.Color.White);
-                graphics.DrawImage((Image)inputPic, (int)((double)inputPic.Height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)((double)inputPic.Width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
+                graphics.DrawImage(inputPic, (int)(inputPic.Height * Math.Sin(optimumAngle * 3.1415 / 180.0) * 0.5), -(int)(inputPic.Width * Math.Sin(optimumAngle * 3.1415 / 180.0) * 0.5));
             };
-            return bitmap2;
+#if DEBUG
+            if (Math.Abs(optimumAngle) > 1.5)
+                logs += $"{optimumAngle} - {filename}\n";
+#endif
+            return horisontalPic;
         }
 
+
+        //определение угла поворота документа путём нахождения угла, при котором преобразованный в 
+        //вертикальную линию документ будет иметь максимальную разницу между соседними пикселями:
         private float GetOptimumAngle(Bitmap inputBmp, float initAngle, float amplitude, float stepSize)
         {
             int width = inputBmp.Width;
             int height = inputBmp.Height;
-            Bitmap bitmap1 = new Bitmap(1, height);
-            int[] numArray1 = new int[height];
-            Dictionary<float, int> source = new Dictionary<float, int>();
-            for (float num1 = (-amplitude + initAngle); num1 < (amplitude + initAngle); num1 += stepSize)
+            //переменная для хранения документа, преобразованного в bitmap шириной в 1 пиксель:
+            Bitmap columnPic = new Bitmap(1, height);
+            //переменные для хранения значений суммарной яркости каждого пикселя:
+            int brightnessPrevPix = 255 * 3;
+            int brightnessCurrPix = 255 * 3;
+            //int maxGradient = 0;
+            //переменная для храниния вектора разниц яркости соседних пикселей (градиентов) отдностолбцовой картинки (одномерной проекции): 
+            int[] brightnessGradients = new int[height];
+            //int[] brightness = new int[height];
+            //словарь соответствия характеристики контраста углу поворота:
+            Dictionary<float, int> angles = new Dictionary<float, int>();
+            //переменная для хранения изображения письма, повёрнутого на пробный угол:
+            Bitmap rotatedPic = new Bitmap(width, height);
+            //переменная для хранения суммы "top 5%" значений градиента яркости:
+            int topGradsSum = 0;
+            //цикличный поворот документа с заданным шагом в заданном диапазоне и проверка контрастности его одномерной проекции:
+            for (float angle = (-amplitude + initAngle); angle < (amplitude + initAngle); angle += stepSize)
             {
-                int num2 = 765;
-                Bitmap bitmap2 = new Bitmap(width, height);
-                using (Graphics graphics = Graphics.FromImage((Image)bitmap2))
+                //поворот картинки:
+                using (Graphics graphics = Graphics.FromImage(rotatedPic))
                 {
-                    graphics.RotateTransform(num1);
+                    graphics.RotateTransform(angle);
                     graphics.Clear(System.Drawing.Color.White);
-                    graphics.DrawImage((Image)inputBmp, (int)((double)height * Math.Sin((double)num1 * 3.1415 / 180.0) * 0.5), -(int)((double)width * Math.Sin((double)num1 * 3.1415 / 180.0) * 0.5));
+                    graphics.DrawImage(inputBmp, (int)((double)height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)(width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
                 };
-                using (Graphics graphics = Graphics.FromImage((Image)bitmap1))
-                    graphics.DrawImage((Image)bitmap2, 0, 0, 1, height);
+                //создание одномерной проекции:
+                using (Graphics graphics = Graphics.FromImage(columnPic))
+                    graphics.DrawImage(rotatedPic, 0, 0, 1, height);
+                //сохранение начального значения яркости предыдущего пикселя:
+                brightnessPrevPix = columnPic.GetPixel(0, 0).R + columnPic.GetPixel(0, 0).G + columnPic.GetPixel(0, 0).B;
+                //составление вектора градиентов:
                 for (int y = 0; y < height; ++y)
                 {
-                    int[] numArray2 = numArray1;
-                    int index = y;
-                    int num3 = num2;
-                    System.Drawing.Color pixel = bitmap1.GetPixel(0, y);
-                    int r1 = (int)pixel.R;
-                    pixel = bitmap1.GetPixel(0, y);
-                    int g1 = (int)pixel.G;
-                    int num4 = r1 + g1;
-                    pixel = bitmap1.GetPixel(0, y);
-                    int b1 = (int)pixel.B;
-                    int num5 = num4 + b1;
-                    int num6 = Math.Abs(num3 - num5);
-                    numArray2[index] = num6;
-                    pixel = bitmap1.GetPixel(0, y);
-                    int r2 = (int)pixel.R;
-                    pixel = bitmap1.GetPixel(0, y);
-                    int g2 = (int)pixel.G;
-                    int num7 = r2 + g2;
-                    pixel = bitmap1.GetPixel(0, y);
-                    int b2 = (int)pixel.B;
-                    num2 = num7 + b2;
+                    brightnessCurrPix = columnPic.GetPixel(0, y).R + columnPic.GetPixel(0, y).G + columnPic.GetPixel(0, y).B;
+                    //brightness[y] = (255 * 3) - brightnessCurrPix;
+                    brightnessGradients[y] = Math.Abs(brightnessCurrPix - brightnessPrevPix);
+                    brightnessPrevPix = brightnessCurrPix;
                 };
-                System.Array.Sort<int>(numArray1);
-                System.Array.Reverse((System.Array)numArray1);
-                source.Add(num1, ((IEnumerable<int>)numArray1).Take<int>(10).Sum());
+//Рисование диаграмм яркости и градиента на изображении письма для визуализации и лучшего понимания при отладке алгоритма:
+                //using (Graphics graphics = Graphics.FromImage((Image)rotatedPic))
+                //{
+                //    //graphics.Clear(System.Drawing.Color.White);
+                //    Pen penRed = new Pen(System.Drawing.Color.Red);
+                //    Pen penBlue = new Pen(System.Drawing.Color.Navy);
+                //    for (int y = 0; y < brightnessGradients.Length; ++y)
+                //    {
+                //        graphics.DrawLine(penRed, 0, y, brightnessGradients[y]/3, y);
+                //        graphics.DrawLine(penBlue, width, y, width - brightness[y]/3, y);
+                //    }
+                //выявление top 5% значений градиентов:
+                Array.Sort<int>(brightnessGradients);
+                Array.Reverse((System.Array)brightnessGradients);
+                //maxGradient = brightnessGradients[0];
+                //определение критерия контрастности (суммы top 5%) градиентов проекции:
+                topGradsSum = (brightnessGradients).Take((int)(0.04 * height)).Sum();
+                //    for (int y = 0; y < brightnessGradients.Length; ++y)
+                //    {
+                //        graphics.DrawString(topGradsSum.ToString(), new System.Drawing.Font("Times New Roman", 18.0f), new SolidBrush(System.Drawing.Color.DarkGreen), new Point(50, 30));
+                //        graphics.DrawString(maxGradient.ToString(), new System.Drawing.Font("Times New Roman", 18.0f), new SolidBrush(System.Drawing.Color.DarkGreen), new Point(50, 10));
+                //    }
+                //};
+                //пополнение словарая соответствия характеристики контраста углу поворота:
+                angles.Add(angle, topGradsSum);
             }
-            return source.Aggregate<KeyValuePair<float, int>>((Func<KeyValuePair<float, int>, KeyValuePair<float, int>, KeyValuePair<float, int>>)((l, r) => l.Value <= r.Value ? r : l)).Key;
+            //выбор оптимального угла по наибольшей характеристике контраста:
+            return angles.Aggregate((l, r) => l.Value > r.Value ? l : r).Key;
         }
+
+        //private float GetOptimumAngle(Bitmap inputBmp, float initAngle, float amplitude, float stepSize)
+        //{
+        //    int width = inputBmp.Width;
+        //    int height = inputBmp.Height;
+        //    //переменная для хранения документа, преобразованного в bitmap шириной в 1 пиксель:
+        //    Bitmap columnPic = new Bitmap(1, height);
+        //    //
+        //    //int brightnessPrevPix = 255 * 3;
+        //    //int brightnessCurrPix = 255 * 3;
+        //    int maxBrightness = 0;
+        //    var topBrightnesses = new List<int>();
+        //    //int[] brightnessGradients = new int[height];
+        //    int[] brightness = new int[height];
+        //    Dictionary<float, int> angles = new Dictionary<float, int>();
+        //    Bitmap rotatedPic = new Bitmap(width, height);
+        //    int midTopBrights = 0;
+        //    for (float angle = (-amplitude + initAngle); angle < (amplitude + initAngle); angle += stepSize)
+        //    {
+        //        using (Graphics graphics = Graphics.FromImage(rotatedPic))
+        //        {
+        //            graphics.RotateTransform(angle);
+        //            graphics.Clear(System.Drawing.Color.White);
+        //            graphics.DrawImage(inputBmp, (int)((double)height * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5), -(int)(width * Math.Sin((double)angle * 3.1415 / 180.0) * 0.5));
+        //        };
+        //        //rotatedPic.Save($"D:\\TEMP\\{angle}.jpg");
+        //        using (Graphics graphics = Graphics.FromImage(columnPic))
+        //            graphics.DrawImage(rotatedPic, 0, 0, 1, height);
+        //        //brightnessPrevPix = columnPic.GetPixel(0, 0).R + columnPic.GetPixel(0, 0).G + columnPic.GetPixel(0, 0).B;
+        //        for (int y = 0; y < height; ++y)
+        //            brightness[y] = (255 * 3) - (columnPic.GetPixel(0, y).R + columnPic.GetPixel(0, y).G + columnPic.GetPixel(0, y).B);
+
+
+        //        //Array.Sort<int>(brightnessGradients);
+        //        maxBrightness = System.Linq.Enumerable.Max(brightness);
+        //        //Bitmap gradGraph = new Bitmap(height, maxBrightness);
+
+        //        //Array.Reverse((System.Array)brightnessGradients);
+        //        foreach (int item in brightness)
+        //            if (item > 0.7 * maxBrightness) topBrightnesses.Add(item);
+        //        midTopBrights = topBrightnesses.Sum() / topBrightnesses.Count;
+        //        using (Graphics graphics = Graphics.FromImage((Image)rotatedPic))
+        //        {
+        //            //graphics.Clear(System.Drawing.Color.White);
+        //            Pen penRed = new Pen(System.Drawing.Color.Red);
+        //            Pen penBlue = new Pen(System.Drawing.Color.Navy);
+        //            for (int y = 0; y < brightness.Length; ++y)
+        //            {
+        //                //graphics.DrawLine(penRed, 0, y, brightnessGradients[y]/3, y);
+        //                graphics.DrawLine(penBlue, width, y, width - brightness[y] / 3, y);
+        //                graphics.DrawString(midTopBrights.ToString(), new System.Drawing.Font("Times New Roman", 24.0f), new SolidBrush(System.Drawing.Color.Red), new Point(50, 50));
+        //                graphics.DrawString(maxBrightness.ToString(), new System.Drawing.Font("Times New Roman", 24.0f), new SolidBrush(System.Drawing.Color.Red), new Point(50, 10));
+        //            }
+        //        };
+        //        angles.Add(angle, midTopBrights);
+        //        topBrightnesses.Clear();
+        //        rotatedPic.Save($"D:\\TEMP\\anomaly\\{midTopBrights}-{angle}-graph.jpg");
+        //    }
+        //    float optimumAngle = angles.Aggregate((l, r) => l.Value > r.Value ? l : r).Key;
+        //    //if (Math.Abs(optimumAngle) > 1)
+        //    return optimumAngle;
+        //}
+
+
+
     }
 }
 

@@ -25,7 +25,9 @@ namespace PilotOCR
                                                                                                 { 'л', "[лп]" },
                                                                                                 { 'О', "[О0@]" },
                                                                                                 { '0', "[О0@]" },
-                                                                                                { '@', "[О0@]" } };
+                                                                                                { '@', "[О0@]" },
+                                                                                                { '(', "[(]" },
+                                                                                                { ')', "[)]" } };
 
         //чтение настроек подключения к базе данных:
         private readonly string connectionParameters = System.IO.File.ReadAllText($"{Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)}\\ASCON\\Pilot-ICE Enterprise\\PilotOCR\\connection_settings.txt");
@@ -38,11 +40,11 @@ namespace PilotOCR
         private string ConvertToRegex(string input, Dictionary<char, string> replacements)
             //метод, конвертирующий поисковый запрос в regex выражение для компенсации погрешностей распознавания
         {
-            input = MySqlHelper.EscapeString(input);
-            if (replacements == null) return input;
+            string safeInput = MySqlHelper.EscapeString(input);
+            if (replacements == null) return safeInput;
             if (input == null) return "";
             string result = "";
-            foreach (char c in input)
+            foreach (char c in safeInput)
             {
                 if (replacements.Keys.ToList().Contains(c))
                     result += replacements[c];

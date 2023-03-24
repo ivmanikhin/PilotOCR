@@ -14,6 +14,8 @@ namespace PilotOCR
             _mainClass = mainClass;
             InitializeComponent();
         }
+
+        //обновление прогрессбара и информации о ходе распознавания писем:
         public void UpdateProgress()
         {
             new Thread(() =>
@@ -26,6 +28,7 @@ namespace PilotOCR
             }).Start();
         }
 
+        //обновление информации о распознаваемом в данный момент письме
         public void SetCurrentDocName(string currentDocName)
         {
             new Thread(() =>
@@ -38,19 +41,21 @@ namespace PilotOCR
         }
 
 
-
+        //установка максимального значение прогрессбара = кол-ву писем:
         public void SetMax(int maxValue)
         {
             progressBar1.Maximum = maxValue;
             Comment.Text = "Распознано 0 документов из " + maxValue.ToString();
         }
 
+        //по нажатию отмены остановить процесс распознавания:
         private void cancelBtn_Click(object sender, EventArgs e)
         {
             _mainClass.KillThemAll();
             this.Close();
         }
 
+        //закрывание окна по сигналу основной программы:
         public void CloseRemotely()
         {
             new Thread(() =>
@@ -59,6 +64,7 @@ namespace PilotOCR
             }).Start();
         }
 
+        //отмена распознавания по закрытию окна:
         private void ProgressDialog_FormClosed(object sender, FormClosedEventArgs e)
         {
             _mainClass.KillThemAll();
