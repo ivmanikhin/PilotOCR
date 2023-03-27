@@ -738,7 +738,7 @@ namespace PilotOCR
             string text = (string)null;
             if (pageImg != null)
             {
-                using (Engine engine = new Engine(this.GetResourcesPath() + "\\tessdata\\", "rus(best)"))
+                using (Engine engine = new Engine(this.GetResourcesPath() + "\\tessdata\\", "rus"))
                 {
                     Image image = (Image)this.TiltDocument((Bitmap)pageImg, filename);
                     using (MemoryStream memoryStream = new MemoryStream())
